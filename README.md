@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# u402 — Mandi Coffee
 
-## Getting Started
+Razorpay AI Buildathon · Track 01 · AI Growth & Agentic Commerce
 
-First, run the development server:
+HTTP 402 for Indian merchants. A buyer talks to the shop (or clicks Add to cart). Settlement is **Razorpay test-mode Orders/Payments**. Spend is gated by a UAP-shaped mandate. Every rupee is on the audit trail.
+
+## Run
 
 ```bash
+cp .env.example .env.local
+# paste rzp_test_ Key ID + Key Secret
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000/shop](http://localhost:3000/shop).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Until keys are in `.env.local`, checkout still quotes a 402 and you can simulate success/decline. After keys are in, the same button opens Razorpay Checkout. The `order_…` / `pay_…` IDs must match the Test Mode dashboard.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Test cards (Razorpay)
 
-## Learn More
+- Success: `4111 1111 1111 1111` · any future expiry · any CVV
+- Failure (graceful stop demo): use a [failure method](https://razorpay.com/docs/payments/payments/test-card-upi-details/) from the docs, then watch `/audit`
 
-To learn more about Next.js, take a look at the following resources:
+Webhook URL when you have a tunnel: `https://<host>/api/webhooks/razorpay`  
+Events: `payment.captured`, `payment.failed`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Demo script
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Shop: *filter coffee for 4 under ₹400*
+2. Click **Add to cart** or say *add the 250g pack*
+3. Accept the jaggery upsell if it still fits the ₹500 mandate
+4. Checkout → Razorpay test pay
+5. Try *add the blender* → mandate gate, no Order created
+6. Decline a payment → stop rule, cart not duplicated
+7. `/catalog` `/campaigns` `/audit`
 
-## Deploy on Vercel
+## Stack
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js · TypeScript · Razorpay Node SDK · file-backed audit log
