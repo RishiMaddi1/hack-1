@@ -1,38 +1,85 @@
-import { createHmac } from "crypto";
+import { createPublicKey, verify } from "crypto";
 import type { Mandate, Product } from "./types";
+import { canonicalMandate, MANDATE_ALG, MANDATE_KID } from "./mandate-claims";
+import { writeAudit } from "./audit";
 
-function secret() {
-  return process.env.MANDATE_SECRET || "u402-dev-mandate-secret";
+/** Must match the public half of BUYER_MANDATE_PRIVATE_KEY_B64 / demo private key. */
+const DEMO_PUBLIC_B64 = "MCowBQYDK2VwAyEAeUinDlLu+mMo68ZJxEEZ5BXBBWj+WhoDC7MiA5/7dJg=";
+
+function publicKey() {
+  const b64 = process.env.BUYER_MANDATE_PUBLIC_KEY_B64 || DEMO_PUBLIC_B64;
+  return createPublicKey({ key: Buffer.from(b64, "base64"), format: "der", type: "spki" });
 }
 
-export function signMandate(payload: Omit<Mandate, "signature">): string {
-  const body = JSON.stringify({
-    id: payload.id,
-    agentId: payload.agentId,
-    merchantId: payload.merchantId,
-    maxPaise: payload.maxPaise,
-    remainingPaise: payload.remainingPaise,
-    categories: payload.categories,
-    expiresAt: payload.expiresAt,
-  });
-  return createHmac("sha256", secret()).update(body).digest("hex");
-}
-
+/**
+ * Merchant-side verify only. Does not hold or import the private key.
+ */
 export function verifyMandate(mandate: Mandate): boolean {
-  const { signature, ...rest } = mandate;
-  return signMandate(rest) === signature;
+  try {
+    const claims = {
+      id: mandate.id,
+      agentId: mandate.agentId,
+      merchantId: mandate.merchantId,
+      maxPaise: mandate.maxPaise,
+      remainingPaise: mandate.remainingPaise,
+      categories: mandate.categories,
+      expiresAt: mandate.expiresAt,
+      createdAt: mandate.createdAt,
+    };
+    return verify(
+      null,
+      Buffer.from(canonicalMandate(claims)),
+      publicKey(),
+      Buffer.from(mandate.signature, "base64"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function auditMandateVerify(sessionId: string, mandate: Mandate, ok: boolean) {
+  writeAudit({
+    sessionId,
+    type: ok ? "mandate.verify_ok" : "mandate.verify_fail",
+    explainable: true,
+    bounded: true,
+    gated: true,
+    reason: ok
+      ? `Merchant verified mandate ${mandate.id} with public key (kid ${mandate.kid || MANDATE_KID}).`
+      : `Merchant rejected mandate ${mandate.id}: signature verification failed. No Razorpay Order.`,
+    data: { mandateId: mandate.id, alg: mandate.alg || MANDATE_ALG, kid: mandate.kid || MANDATE_KID },
+  });
 }
 
 export type GateResult =
   | { ok: true; reason: string }
-  | { ok: false; code: "MANDATE_EXCEEDED" | "MANDATE_EXPIRED" | "MANDATE_CATEGORY"; reason: string };
+  | {
+      ok: false;
+      code: "MANDATE_EXCEEDED" | "MANDATE_EXPIRED" | "MANDATE_CATEGORY" | "MANDATE_BAD_SIGNATURE";
+      reason: string;
+    };
 
-export function gateCart(mandate: Mandate, products: Product[], payablePaise: number): GateResult {
-  if (!verifyMandate(mandate)) {
-    return { ok: false, code: "MANDATE_EXPIRED", reason: "Mandate signature failed verification." };
+export function gateCart(
+  mandate: Mandate,
+  products: Product[],
+  payablePaise: number,
+  sessionId?: string,
+): GateResult {
+  const sigOk = verifyMandate(mandate);
+  if (sessionId) auditMandateVerify(sessionId, mandate, sigOk);
+  if (!sigOk) {
+    return {
+      ok: false,
+      code: "MANDATE_BAD_SIGNATURE",
+      reason: "Mandate signature failed verification. Buyer authority did not sign this claim. No Razorpay Order.",
+    };
   }
   if (new Date(mandate.expiresAt).getTime() < Date.now()) {
-    return { ok: false, code: "MANDATE_EXPIRED", reason: "Mandate expired. Human must re-authorise." };
+    return {
+      ok: false,
+      code: "MANDATE_EXPIRED",
+      reason: "Mandate expired. Human must re-authorise with the buyer signing authority.",
+    };
   }
   if (mandate.categories !== "*") {
     const bad = products.find((p) => !mandate.categories.includes(p.category));

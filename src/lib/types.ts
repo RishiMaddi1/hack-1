@@ -5,7 +5,7 @@ export type Product = {
   name: string;
   short: string;
   details: string;
-  category: "coffee" | "tea" | "pantry" | "kit" | "appliance";
+  category: "keyboard" | "mouse" | "monitor" | "audio" | "controller" | "accessory";
   pricePaise: MoneyPaise;
   image: string;
   tags: string[];
@@ -27,6 +27,9 @@ export type Mandate = {
   expiresAt: string;
   signature: string;
   createdAt: string;
+  /** Ed25519 signing metadata from buyer authority */
+  alg?: string;
+  kid?: string;
 };
 
 export type Campaign = {
@@ -70,9 +73,18 @@ export type CheckoutRecord = {
   createdAt: string;
 };
 
+export type NegotiateSuggestion = {
+  action: "remove_sku" | "swap_to";
+  sku: string;
+  name: string;
+  pricePaise: number;
+  note: string;
+  replaceSku?: string;
+};
+
 export type U402Quote = {
   u402Version: 1;
-  error: "payment_required" | "mandate_exceeded" | "payment_failed";
+  error: "payment_required" | "mandate_exceeded" | "mandate_expired" | "mandate_bad_signature" | "payment_failed";
   accepts: Array<{
     scheme: "razorpay_order";
     network: "razorpay_test" | "razorpay_mock";
@@ -98,6 +110,8 @@ export type U402Quote = {
     lines: CheckoutRecord["lines"];
     explanation: string;
   };
+  /** Same buyer agent can act on these — not a second agent */
+  negotiate?: NegotiateSuggestion[];
 };
 
 export type ChatProductCard = {
@@ -116,6 +130,7 @@ export type ChatMessage = {
   text: string;
   products?: ChatProductCard[];
   upsell?: ChatProductCard;
+  crossSell?: ChatProductCard[];
   quote?: U402Quote;
 };
 
@@ -124,4 +139,7 @@ export type GrowthRow = {
   withUpsell: boolean;
   aovPaise: number;
   recovered: boolean;
+  source?: "live" | "seed";
+  sessionId?: string;
+  at?: string;
 };

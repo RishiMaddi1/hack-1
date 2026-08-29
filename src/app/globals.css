@@ -1,24 +1,24 @@
 @import "tailwindcss";
 
 :root {
-  --ink: #0c0b09;
-  --ink-2: #161410;
-  --paper: #f4efe4;
-  --muted: #b7ae9c;
-  --gold: #d4a574;
-  --gold-2: #f0d3a8;
-  --line: rgba(244, 239, 228, 0.12);
-  --danger: #e07a5f;
+  --bg: #f6f1e8;
+  --fg: #1c1917;
+  --muted: #57534e;
+  --card: #fffcf7;
+  --line: #e4ddd2;
+  --accent: #9a3412;
+  --accent-2: #c2410c;
+  --danger: #b91c1c;
 }
 
 @theme inline {
-  --color-ink: var(--ink);
-  --color-ink-2: var(--ink-2);
-  --color-paper: var(--paper);
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
   --color-muted: var(--muted);
-  --color-gold: var(--gold);
-  --color-gold-2: var(--gold-2);
+  --color-card: var(--card);
   --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
   --color-danger: var(--danger);
   --font-sans: var(--font-sans);
   --font-serif: var(--font-serif);
@@ -27,22 +27,26 @@
 
 html,
 body {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--bg);
+  color: var(--fg);
   min-height: 100%;
 }
 
 body {
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--font-sans), "Segoe UI", sans-serif;
 }
 
 ::selection {
-  background: var(--gold);
-  color: var(--ink);
+  background: #fed7aa;
+  color: var(--fg);
 }
 
 input,
 textarea,
 button {
   font: inherit;
+}
+
+a {
+  color: inherit;
 }

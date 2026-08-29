@@ -5,8 +5,54 @@ import { getMandateForSession, mutateCart } from "./cart";
 import { explainMoney, priceCart } from "./quote";
 import { createRazorpayOrder, fetchPayment, hasLiveTestKeys, getKeyId, verifyPaymentSignature } from "./razorpay";
 import { getDb, getOrCreateSession, saveDb } from "./store";
-import { signMandate } from "./mandate";
-import type { CheckoutRecord, U402Quote } from "./types";
+import { issueMandate } from "./mandate-signer";
+import { buildNegotiate } from "./negotiate";
+import type { CheckoutRecord, Mandate, U402Quote } from "./types";
+
+function resignMandate(mandate: Mandate, sessionId: string): Mandate {
+  const next = issueMandate({
+    id: mandate.id,
+    agentId: mandate.agentId,
+    merchantId: mandate.merchantId,
+    maxPaise: mandate.maxPaise,
+    remainingPaise: mandate.remainingPaise,
+    categories: mandate.categories,
+    expiresAt: mandate.expiresAt,
+    createdAt: mandate.createdAt,
+  });
+  Object.assign(mandate, next);
+  writeAudit({
+    sessionId,
+    type: "mandate.signed",
+    explainable: true,
+    bounded: true,
+    gated: true,
+    reason: `Buyer authority re-signed mandate ${mandate.id} after spend (remaining ₹${mandate.remainingPaise / 100}).`,
+    data: { mandateId: mandate.id, remainingPaise: mandate.remainingPaise },
+  });
+  return mandate;
+}
+
+function recordLiveGrowth(sessionId: string, amountPaise: number, withUpsell: boolean) {
+  const db = getDb();
+  db.growth.unshift({
+    id: id("grw"),
+    withUpsell,
+    aovPaise: amountPaise,
+    recovered: true,
+    source: "live",
+    sessionId,
+    at: new Date().toISOString(),
+  });
+}
+
+function blockedError(
+  code: string,
+): U402Quote["error"] {
+  if (code === "MANDATE_EXPIRED") return "mandate_expired";
+  if (code === "MANDATE_BAD_SIGNATURE") return "mandate_bad_signature";
+  return "mandate_exceeded";
+}
 
 export async function quoteCheckout(sessionId: string): Promise<
   | { status: 402; body: U402Quote }
@@ -19,7 +65,7 @@ export async function quoteCheckout(sessionId: string): Promise<
   }
   const mandate = getMandateForSession(sessionId);
   const priced = priceCart(session.cart);
-  const { gate, explanation } = explainMoney(mandate, priced);
+  const { gate, explanation } = explainMoney(mandate, priced, sessionId);
 
   writeAudit({
     sessionId,
@@ -36,9 +82,13 @@ export async function quoteCheckout(sessionId: string): Promise<
   });
 
   if (!gate.ok) {
+    const negotiate =
+      gate.code === "MANDATE_EXCEEDED"
+        ? buildNegotiate(mandate, priced.lines, priced.payablePaise)
+        : undefined;
     const body: U402Quote = {
       u402Version: 1,
-      error: "mandate_exceeded",
+      error: blockedError(gate.code),
       accepts: [],
       mandate: {
         id: mandate.id,
@@ -55,6 +105,7 @@ export async function quoteCheckout(sessionId: string): Promise<
         lines: priced.lines,
         explanation,
       },
+      negotiate,
     };
     return { status: 403, body };
   }
@@ -169,20 +220,13 @@ export async function confirmCheckout(opts: {
   const mandate = db.mandates[session.mandateId];
   if (mandate) {
     mandate.remainingPaise -= record.amountPaise;
-    mandate.signature = signMandate({
-      id: mandate.id,
-      agentId: mandate.agentId,
-      merchantId: mandate.merchantId,
-      maxPaise: mandate.maxPaise,
-      remainingPaise: mandate.remainingPaise,
-      categories: mandate.categories,
-      expiresAt: mandate.expiresAt,
-      createdAt: mandate.createdAt,
-    });
+    resignMandate(mandate, opts.sessionId);
   }
   if (record.campaignId && record.discountPaise) {
     spendCampaign(record.campaignId, record.discountPaise);
   }
+  recordLiveGrowth(opts.sessionId, record.amountPaise, Boolean(session.acceptedUpsell));
+  session.acceptedUpsell = false;
   mutateCart(opts.sessionId, "clear");
   session.lastQuote = undefined;
   saveDb();
@@ -199,6 +243,27 @@ export async function confirmCheckout(opts: {
       paymentId: opts.paymentId,
       amountPaise: record.amountPaise,
     },
+  });
+  return { status: 200 as const, body: { ok: true, record } };
+}
+
+export function dismissCheckout(sessionId: string, checkoutId: string) {
+  const db = getDb();
+  const record = db.checkouts[checkoutId];
+  if (!record || record.sessionId !== sessionId) {
+    return { status: 404 as const, body: { error: "Unknown checkout." } };
+  }
+  if (record.status === "paid" || record.status === "failed") {
+    return { status: 200 as const, body: { ok: true, record, skipped: true } };
+  }
+  writeAudit({
+    sessionId,
+    type: "checkout.dismissed",
+    explainable: true,
+    bounded: true,
+    gated: true,
+    reason: `Human closed Razorpay before paying. Checkout ${checkoutId} / ${record.orderId} left quoted — cart intact, no capture. Say pay again for a fresh Order.`,
+    data: { checkoutId, orderId: record.orderId, amountPaise: record.amountPaise },
   });
   return { status: 200 as const, body: { ok: true, record } };
 }
@@ -251,20 +316,13 @@ export function markWebhook(orderId: string, paymentId: string, ok: boolean) {
   const mandate = db.mandates[session.mandateId];
   if (mandate) {
     mandate.remainingPaise -= record.amountPaise;
-    mandate.signature = signMandate({
-      id: mandate.id,
-      agentId: mandate.agentId,
-      merchantId: mandate.merchantId,
-      maxPaise: mandate.maxPaise,
-      remainingPaise: mandate.remainingPaise,
-      categories: mandate.categories,
-      expiresAt: mandate.expiresAt,
-      createdAt: mandate.createdAt,
-    });
+    resignMandate(mandate, record.sessionId);
   }
   if (record.campaignId && record.discountPaise) {
     spendCampaign(record.campaignId, record.discountPaise);
   }
+  recordLiveGrowth(record.sessionId, record.amountPaise, Boolean(session.acceptedUpsell));
+  session.acceptedUpsell = false;
   mutateCart(record.sessionId, "clear");
   saveDb();
   writeAudit({

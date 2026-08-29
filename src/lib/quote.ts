@@ -45,8 +45,8 @@ export function priceCart(cart: CartLine[]): PricedCart {
   };
 }
 
-export function explainMoney(mandate: Mandate, priced: PricedCart) {
-  const gate = gateCart(mandate, priced.products, priced.payablePaise);
+export function explainMoney(mandate: Mandate, priced: PricedCart, sessionId?: string) {
+  const gate = gateCart(mandate, priced.products, priced.payablePaise, sessionId);
   const explanation = [
     priced.lines.map((l) => `${l.qty}× ${l.name} @ ₹${l.unitPaise / 100}`).join("; ") || "Empty cart",
     priced.campaignExplain,

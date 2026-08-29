@@ -4,7 +4,7 @@ import Razorpay from "razorpay";
 export function hasLiveTestKeys(): boolean {
   const key = process.env.RAZORPAY_KEY_ID || "";
   const secret = process.env.RAZORPAY_KEY_SECRET || "";
-  return key.startsWith("rzp_test_") && secret.length > 8;
+  return key.startsWith("rzp_test_") && secret.length >= 8;
 }
 
 export function getKeyId(): string {

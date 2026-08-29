@@ -22,6 +22,9 @@ export function mutateCart(
   if (action === "clear") {
     session.cart = [];
   } else if (action === "add" && sku) {
+    if (session.cart.some((l) => getProduct(l.sku)?.upsellSku === sku)) {
+      session.acceptedUpsell = true;
+    }
     const line = session.cart.find((l) => l.sku === sku);
     if (line) line.qty += qty;
     else session.cart.push({ sku, qty });

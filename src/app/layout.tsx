@@ -1,14 +1,18 @@
 import type { Metadata } from "next";
-import { DM_Sans, Fraunces, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Sans, Source_Serif_4, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { SiteNav } from "@/components/SiteNav";
+import { ShopProvider } from "@/components/ShopProvider";
+import { StoreHeader } from "@/components/StoreHeader";
+import { StoreFooter } from "@/components/StoreFooter";
+import { AskDrawer, CartDrawer } from "@/components/Drawers";
 
-const sans = DM_Sans({
+const sans = IBM_Plex_Sans({
   variable: "--font-sans",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
 });
 
-const serif = Fraunces({
+const serif = Source_Serif_4({
   variable: "--font-serif",
   subsets: ["latin"],
 });
@@ -19,20 +23,21 @@ const mono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "u402 — Mandi Coffee",
-  description:
-    "HTTP 402 for Indian merchants. Agent-readable catalog, conversational checkout, Razorpay test-mode settlement.",
+  title: "Circuit — keyboards, mice, monitors",
+  description: "A desk shop in Indiranagar. Pay on Razorpay test mode.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="en"
-      className={`${sans.variable} ${serif.variable} ${mono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col bg-ink text-paper">
-        <SiteNav />
-        <div className="flex-1">{children}</div>
+    <html lang="en" className={`${sans.variable} ${serif.variable} ${mono.variable} h-full antialiased`}>
+      <body className="flex min-h-full flex-col bg-bg text-fg">
+        <ShopProvider>
+          <StoreHeader />
+          <div className="flex-1">{children}</div>
+          <StoreFooter />
+          <CartDrawer />
+          <AskDrawer />
+        </ShopProvider>
       </body>
     </html>
   );
