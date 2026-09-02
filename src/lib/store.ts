@@ -158,8 +158,10 @@ function migrate(parsed: Record<string, unknown>): Db {
 function load(): Db {
   if (globalStore.__u402?.schema === STORE_SCHEMA) return globalStore.__u402;
   try {
-    if (existsSync(DATA_FILE)) {
-      const parsed = JSON.parse(readFileSync(DATA_FILE, "utf8")) as Record<string, unknown>;
+    if (existsSync(/*turbopackIgnore: true*/ DATA_FILE)) {
+      const parsed = JSON.parse(
+        readFileSync(/*turbopackIgnore: true*/ DATA_FILE, "utf8"),
+      ) as Record<string, unknown>;
       if (parsed.schema === STORE_SCHEMA || parsed.schema === "circuit-kreo-v2") {
         const db = migrate(parsed);
         globalStore.__u402 = db;
@@ -176,8 +178,10 @@ function load(): Db {
 function persist(db: Db) {
   globalStore.__u402 = db;
   try {
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+    if (!existsSync(/*turbopackIgnore: true*/ DATA_DIR)) {
+      mkdirSync(/*turbopackIgnore: true*/ DATA_DIR, { recursive: true });
+    }
+    writeFileSync(/*turbopackIgnore: true*/ DATA_FILE, JSON.stringify(db, null, 2));
   } catch {
     // Vercel / read-only fs — memory still works for the session
   }

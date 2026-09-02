@@ -29,20 +29,23 @@ jobs:
 
       - name: Install and build standalone bundle
         run: |
+          set -euo pipefail
           npm ci
           npm run build
           grep -q "Gaming-desk shop" .next/server/app/index.html
+          # Copy the whole standalone folder as deploy/ (do NOT mkdir deploy first).
           rm -rf deploy
-          cp -r .next/standalone/* deploy/
-          cp -r .next/static deploy/.next/static
-          cp -r public deploy/public
+          cp -a .next/standalone deploy
+          cp -a .next/static deploy/.next/static
+          cp -a public deploy/public
           cp start.js deploy/start.js
           cp startup.sh deploy/startup.sh
           chmod +x deploy/startup.sh
-          test -f deploy/.next/server/app/index.html
           test -f deploy/server.js
           test -f deploy/start.js
-          # Azure Oryx ignores custom startup and runs `npm start` — force bind via start.js.
+          test -f deploy/.next/server/app/index.html
+          grep -q "Gaming-desk shop" deploy/.next/server/app/index.html
+          # Azure Oryx runs `npm start` — force bind via start.js.
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('deploy/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node start.js'; fs.writeFileSync('deploy/package.json', JSON.stringify(p,null,2));"
           grep -n '"start"' deploy/package.json
           ls -la deploy | head -40
