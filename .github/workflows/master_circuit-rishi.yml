@@ -33,28 +33,31 @@ jobs:
           npm ci
           npm run build
           grep -q "Gaming-desk shop" .next/server/app/index.html
-          # Copy the whole standalone folder as deploy/ (do NOT mkdir deploy first).
-          rm -rf deploy
+          rm -rf deploy site.zip
           cp -a .next/standalone deploy
           cp -a .next/static deploy/.next/static
           cp -a public deploy/public
           cp start.js deploy/start.js
           cp startup.sh deploy/startup.sh
+          cp .deployment deploy/.deployment
           chmod +x deploy/startup.sh
           test -f deploy/server.js
           test -f deploy/start.js
+          test -f deploy/.next/BUILD_ID
           test -f deploy/.next/server/app/index.html
           grep -q "Gaming-desk shop" deploy/.next/server/app/index.html
+          echo "BUILD_ID=$(cat deploy/.next/BUILD_ID)"
           # Azure Oryx runs `npm start` — force bind via start.js.
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('deploy/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node start.js'; fs.writeFileSync('deploy/package.json', JSON.stringify(p,null,2));"
-          grep -n '"start"' deploy/package.json
-          ls -la deploy | head -40
+          # Zip explicitly so hidden .next/ survives artifact + Kudu deploy.
+          (cd deploy && zip -ryq ../site.zip .)
+          unzip -l site.zip | grep -E '\.next/BUILD_ID|server\.js|start\.js'
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: deploy
+          path: site.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -68,12 +71,22 @@ jobs:
         with:
           name: node-app
 
+      - name: Verify bundle before Azure upload
+        run: |
+          set -euo pipefail
+          unzip -q site.zip -d site
+          test -f site/.next/BUILD_ID
+          test -f site/server.js
+          test -f site/start.js
+          test -f site/.deployment
+          ls -la site/.next | head -20
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: circuit-rishi
           slot-name: Production
-          package: .
+          package: site
           clean: true
           restart: true
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_933EB48F75FF44D780C0C1EE2DB36F6B }}

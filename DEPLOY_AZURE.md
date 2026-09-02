@@ -66,7 +66,7 @@ Web App → **Settings** → **Environment variables** → **App settings** tab 
 | `RAZORPAY_KEY_ID` | your test key |
 | `RAZORPAY_KEY_SECRET` | your secret |
 | `RAZORPAY_WEBHOOK_SECRET` | set after step 8 |
-| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` |
+| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `false` |
 | `WEBSITE_NODE_DEFAULT_VERSION` | `~20` |
 
 Add optional keys if you use them: `OPENAI_API_KEY`, `MCP_SHARED_SECRET`, mandate keys.
