@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: azure-circuit-rishi
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
