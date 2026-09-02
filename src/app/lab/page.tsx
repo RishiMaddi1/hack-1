@@ -91,6 +91,18 @@ export default function LabPage() {
           body="HMAC with the wrong secret — same check as POST /api/webhooks/razorpay."
           onClick={() => void run("bad_webhook")}
         />
+        <LabButton
+          disabled={busy || !sessionId}
+          title="Double capture race"
+          body="Webhook and client confirm both fire. Mandate must debit once."
+          onClick={() => void run("double_capture")}
+        />
+        <LabButton
+          disabled={busy || !sessionId}
+          title="Agent tries to underpay ₹1"
+          body="Client asks for amountPaise=100. Server still quotes the real cart (₹599)."
+          onClick={() => void run("underpay")}
+        />
       </div>
 
       {result ? (

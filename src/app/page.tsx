@@ -39,7 +39,6 @@ export default function Home() {
             </Link>
           </div>
         </div>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={hero?.image ?? PRODUCTS[0].image}
           alt={hero?.name ?? "Gaming keyboard"}

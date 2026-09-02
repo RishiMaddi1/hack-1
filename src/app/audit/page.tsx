@@ -8,10 +8,16 @@ import type { AuditEvent, GrowthRow } from "@/lib/types";
 function labelFor(type: string): { title: string; tone: "ok" | "warn" | "bad" | "neutral" } {
   const map: Record<string, { title: string; tone: "ok" | "warn" | "bad" | "neutral" }> = {
     "payment.captured": { title: "Payment captured", tone: "ok" },
+    "payment.capture_race": { title: "Capture race — no double debit", tone: "warn" },
     "payment.failed": { title: "Payment failed", tone: "bad" },
     "checkout.quoted": { title: "Checkout quoted (402)", tone: "ok" },
     "checkout.blocked": { title: "Blocked — no Order (403)", tone: "warn" },
     "checkout.dismissed": { title: "Payment window closed", tone: "neutral" },
+    "checkout.amount_injection_blocked": { title: "Client amount ignored", tone: "warn" },
+    "lab.double_capture": { title: "Lab · double capture race", tone: "warn" },
+    "lab.forge_remaining": { title: "Lab · forged remaining", tone: "bad" },
+    "lab.replay_stale": { title: "Lab · stale mandate replay", tone: "bad" },
+    "lab.bad_webhook": { title: "Lab · bad webhook signature", tone: "bad" },
     "mandate.verify_ok": { title: "Mandate verified", tone: "ok" },
     "mandate.verify_fail": { title: "Mandate signature rejected", tone: "bad" },
     "mandate.signed": { title: "Mandate signed", tone: "neutral" },
@@ -23,9 +29,6 @@ function labelFor(type: string): { title: string; tone: "ok" | "warn" | "bad" | 
     "upsell.proposed": { title: "Upsell suggested", tone: "ok" },
     "upsell.refused": { title: "Upsell skipped (over cap)", tone: "warn" },
     "catalog.search": { title: "Catalog search", tone: "neutral" },
-    "lab.forge_remaining": { title: "Lab · forged remaining", tone: "bad" },
-    "lab.replay_stale": { title: "Lab · stale mandate replay", tone: "bad" },
-    "lab.bad_webhook": { title: "Lab · bad webhook signature", tone: "bad" },
   };
   if (map[type]) return map[type];
   if (type.startsWith("webhook") || type.includes("payment.captured")) {

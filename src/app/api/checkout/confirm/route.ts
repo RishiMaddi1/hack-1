@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { confirmCheckout, dismissCheckout, failCheckout } from "@/lib/checkout";
+import { clientKey, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as {
@@ -14,6 +15,13 @@ export async function POST(request: Request) {
   };
   if (!body.sessionId || !body.checkoutId) {
     return NextResponse.json({ error: "sessionId and checkoutId required" }, { status: 400 });
+  }
+  const limited = rateLimit(`confirm:${clientKey(request, body.sessionId)}`, 20, 60_000);
+  if (!limited.ok) {
+    return NextResponse.json(rateLimitResponse(limited.retryAfterSec), {
+      status: 429,
+      headers: { "Retry-After": String(limited.retryAfterSec) },
+    });
   }
   if (body.dismissed) {
     const result = dismissCheckout(body.sessionId, body.checkoutId);

@@ -10,7 +10,7 @@
 
 2:50 Gate. “Add the Obsidian 27-inch.” Type pay → 403. Same agent offers a substitute (negotiate). No Order in dashboard.
 
-3:20 Lab. Forge remaining without re-sign → verify fail. Expire mandate → blocked. Signature is load-bearing.
+3:20 Lab. Forge remaining without re-sign → verify fail. Expire mandate → blocked. Signature is load-bearing. Underpay attempt still quotes the real cart. Double capture still debits once.
 
 3:50 Growth. `/audit` live AOV with vs without bounded upsell (after real captures).
 

@@ -208,43 +208,75 @@ export async function confirmCheckout(opts: {
   }
 
   const payment = await fetchPayment(opts.paymentId);
+  // Re-check after await — webhook may have won the race while we talked to Razorpay.
+  const again = getDb().checkouts[opts.checkoutId];
+  if (!again || again.status === "paid") {
+    writeAudit({
+      sessionId: opts.sessionId,
+      type: "payment.capture_race",
+      explainable: true,
+      bounded: true,
+      gated: true,
+      reason: `Client confirm lost the race to webhook for ${opts.orderId}. Mandate already spent once — no double debit.`,
+      data: { checkoutId: opts.checkoutId, orderId: opts.orderId, paymentId: opts.paymentId },
+    });
+    return { status: 200 as const, body: { ok: true, record: again, idempotent: true, raced: true } };
+  }
+
   const status = String((payment as { status?: string }).status || "captured");
   if (status === "failed") {
     return failCheckout(opts.sessionId, opts.checkoutId, "Razorpay marked payment failed.");
   }
 
+  applyCapture(again, opts.paymentId, opts.orderId, "client");
+  return { status: 200 as const, body: { ok: true, record: again } };
+}
+
+/** Single writer for paid side-effects — client confirm and webhook both call this. */
+function applyCapture(
+  record: CheckoutRecord,
+  paymentId: string,
+  orderId: string,
+  source: "client" | "webhook",
+) {
+  if (record.status === "paid") return false;
   record.status = "paid";
-  record.paymentId = opts.paymentId;
-  record.orderId = opts.orderId;
-  const session = getOrCreateSession(opts.sessionId);
+  record.paymentId = paymentId;
+  record.orderId = orderId;
+  const db = getDb();
+  const session = getOrCreateSession(record.sessionId);
   const mandate = db.mandates[session.mandateId];
   if (mandate) {
     mandate.remainingPaise -= record.amountPaise;
-    resignMandate(mandate, opts.sessionId);
+    resignMandate(mandate, record.sessionId);
   }
   if (record.campaignId && record.discountPaise) {
     spendCampaign(record.campaignId, record.discountPaise);
   }
-  recordLiveGrowth(opts.sessionId, record.amountPaise, Boolean(session.acceptedUpsell));
+  recordLiveGrowth(record.sessionId, record.amountPaise, Boolean(session.acceptedUpsell));
   session.acceptedUpsell = false;
-  mutateCart(opts.sessionId, "clear");
+  mutateCart(record.sessionId, "clear");
   session.lastQuote = undefined;
   saveDb();
   writeAudit({
-    sessionId: opts.sessionId,
+    sessionId: record.sessionId,
     type: "payment.captured",
     explainable: true,
     bounded: true,
     gated: true,
-    reason: `Captured ${opts.paymentId} for ${opts.orderId}. ${record.explanation}`,
+    reason:
+      source === "webhook"
+        ? `Webhook captured ${paymentId} for ${orderId}.`
+        : `Captured ${paymentId} for ${orderId}. ${record.explanation}`,
     data: {
       checkoutId: record.id,
-      orderId: opts.orderId,
-      paymentId: opts.paymentId,
+      orderId,
+      paymentId,
       amountPaise: record.amountPaise,
+      source,
     },
   });
-  return { status: 200 as const, body: { ok: true, record } };
+  return true;
 }
 
 export function dismissCheckout(sessionId: string, checkoutId: string) {
@@ -309,29 +341,66 @@ export function markWebhook(orderId: string, paymentId: string, ok: boolean) {
     failCheckout(record.sessionId, record.id, "Webhook payment.failed");
     return;
   }
-  if (record.status === "paid") return;
-  record.status = "paid";
-  record.paymentId = paymentId;
-  const session = getOrCreateSession(record.sessionId);
-  const mandate = db.mandates[session.mandateId];
-  if (mandate) {
-    mandate.remainingPaise -= record.amountPaise;
-    resignMandate(mandate, record.sessionId);
-  }
-  if (record.campaignId && record.discountPaise) {
-    spendCampaign(record.campaignId, record.discountPaise);
-  }
-  recordLiveGrowth(record.sessionId, record.amountPaise, Boolean(session.acceptedUpsell));
-  session.acceptedUpsell = false;
-  mutateCart(record.sessionId, "clear");
+  applyCapture(record, paymentId, orderId, "webhook");
+}
+
+/** Lab: simulate client+webhook both trying to capture — mandate must debit once. */
+export function simulateDoubleCapture(sessionId: string) {
+  const db = getDb();
+  const session = getOrCreateSession(sessionId);
+  const remainingBefore = db.mandates[session.mandateId]?.remainingPaise ?? 0;
+  const checkoutId = id("chk");
+  const orderId = `order_race_${checkoutId.slice(4, 12)}`;
+  const amountPaise = 59900;
+  const record: CheckoutRecord = {
+    id: checkoutId,
+    sessionId,
+    status: "quoted",
+    amountPaise,
+    subtotalPaise: amountPaise,
+    discountPaise: 0,
+    orderId,
+    explanation: "Lab race: Harpy @ ₹599 — client confirm vs webhook.",
+    lines: [
+      {
+        sku: "harpy-black-light-weight-rgb-gaming-mouse",
+        name: "Harpy White Light Weight RGB Gaming Mouse",
+        qty: 1,
+        unitPaise: amountPaise,
+        linePaise: amountPaise,
+      },
+    ],
+    createdAt: new Date().toISOString(),
+  };
+  db.checkouts[checkoutId] = record;
   saveDb();
+
+  // Webhook wins first (common in production).
+  const first = applyCapture(record, `pay_race_${checkoutId.slice(4, 10)}`, orderId, "webhook");
+  // Client confirm path after await would see paid — second apply must no-op.
+  const second = applyCapture(record, `pay_race_${checkoutId.slice(4, 10)}`, orderId, "client");
+  const remainingAfter = db.mandates[session.mandateId]?.remainingPaise ?? 0;
+  const spent = remainingBefore - remainingAfter;
   writeAudit({
-    sessionId: record.sessionId,
-    type: "payment.captured",
+    sessionId,
+    type: "lab.double_capture",
     explainable: true,
     bounded: true,
     gated: true,
-    reason: `Webhook captured ${paymentId} for ${orderId}.`,
-    data: { checkoutId: record.id, orderId, paymentId, amountPaise: record.amountPaise },
+    reason:
+      spent === amountPaise && first && !second
+        ? `Race survived: webhook + client both fired; mandate debited once (−₹${amountPaise / 100}). Remaining ${remainingAfter / 100}.`
+        : `Race check unexpected: spent ₹${spent / 100}, first=${first}, second=${second}.`,
+    data: { remainingBefore, remainingAfter, spent, first, second, checkoutId, orderId },
   });
+  return {
+    blocked: spent === amountPaise && !second,
+    remainingBefore,
+    remainingAfter,
+    spent,
+    message:
+      spent === amountPaise && !second
+        ? "Webhook and client both fired. Mandate only dropped once."
+        : "Double-capture race did not stay single-debit — check applyCapture.",
+  };
 }

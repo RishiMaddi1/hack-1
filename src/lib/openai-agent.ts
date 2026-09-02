@@ -1,10 +1,19 @@
 import { getProduct, searchCatalog } from "./catalog";
 import { getCart, getMandateForSession, mutateCart } from "./cart";
 import { quoteCheckout } from "./checkout";
-import { formatInr } from "./money";
-import { priceCart } from "./quote";
 import { writeAudit } from "./audit";
+import { priceCart } from "./quote";
 import { enrichFromSearch, pickCartUpsell, pickPairs, stripClerkMarkdown, toCard } from "./recommend";
+import {
+  PRICE_TOKEN_HELP,
+  cartPayableRef,
+  finalizeAgentPrices,
+  lineRef,
+  mandateMaxRef,
+  mandateRemainingRef,
+  pRef,
+  quoteSummaryForLlm,
+} from "./price-refs";
 import type { ChatMessage, ChatProductCard, U402Quote } from "./types";
 
 const TOOLS = [
@@ -17,7 +26,7 @@ const TOOLS = [
         type: "object",
         properties: {
           query: { type: "string" },
-          budgetRupees: { type: "number", description: "Optional max price in rupees" },
+          budgetRupees: { type: "number", description: "Optional max price in rupees (buyer intent only — not Order amount)" },
         },
         required: ["query"],
       },
@@ -27,7 +36,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "add_to_cart",
-      description: "Add a known SKU to the cart.",
+      description: "Add a known SKU to the cart. Price comes from catalog storage — you cannot set it.",
       parameters: {
         type: "object",
         properties: { sku: { type: "string" }, qty: { type: "number" } },
@@ -50,7 +59,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_cart",
-      description: "See cart totals, campaign, and remaining mandate.",
+      description: "See cart lines and mandate caps as price tokens (server-resolved).",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -59,7 +68,7 @@ const TOOLS = [
     function: {
       name: "quote_checkout",
       description:
-        "Call when the buyer wants to pay, checkout, settle, or buy the cart. Server-prices the cart, checks the mandate, and creates a Razorpay test Order (HTTP 402). Never invent amounts. The client then opens Razorpay so a human can confirm the card — you cannot enter card data.",
+        "Call when the buyer wants to pay, checkout, settle, or buy the cart. Server prices the cart from catalog storage, checks the mandate, and creates a Razorpay test Order (HTTP 402). Takes NO amount arguments — inventing or passing an amount is forbidden.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -70,7 +79,12 @@ type ToolAcc = {
   upsell?: ChatProductCard;
   crossSell?: ChatProductCard[];
   quote?: U402Quote;
+  hintedSkus: string[];
 };
+
+function hintSku(acc: ToolAcc, sku: string) {
+  if (sku && !acc.hintedSkus.includes(sku)) acc.hintedSkus.push(sku);
+}
 
 async function runTool(sessionId: string, name: string, args: Record<string, unknown>, acc: ToolAcc) {
   if (name === "search_catalog") {
@@ -81,6 +95,9 @@ async function runTool(sessionId: string, name: string, args: Record<string, unk
     acc.products = rec.products;
     acc.upsell = rec.upsell;
     acc.crossSell = rec.crossSell;
+    for (const p of rec.products) hintSku(acc, p.sku);
+    if (rec.upsell) hintSku(acc, rec.upsell.sku);
+    for (const p of rec.crossSell) hintSku(acc, p.sku);
     writeAudit({
       sessionId,
       type: "catalog.search",
@@ -94,40 +111,52 @@ async function runTool(sessionId: string, name: string, args: Record<string, unk
       matches: rec.products.map((p) => ({
         sku: p.sku,
         name: p.name,
-        priceInr: formatInr(p.pricePaise),
-        pricePaise: p.pricePaise,
+        price: pRef(p.sku),
         short: p.short.slice(0, 80),
       })),
       upgrade: rec.upsell
-        ? { sku: rec.upsell.sku, name: rec.upsell.name, priceInr: formatInr(rec.upsell.pricePaise) }
+        ? { sku: rec.upsell.sku, name: rec.upsell.name, price: pRef(rec.upsell.sku) }
         : null,
       pairs: rec.crossSell.map((p) => ({
         sku: p.sku,
         name: p.name,
-        priceInr: formatInr(p.pricePaise),
+        price: pRef(p.sku),
       })),
-      note: "Use ONLY priceInr when saying a price. Never convert pricePaise yourself (paise = 1/100 rupee). UI already draws cards — 1–2 plain sentences.",
+      note: PRICE_TOKEN_HELP,
     };
   }
   if (name === "add_to_cart") {
     const sku = String(args.sku || "");
     const product = getProduct(sku);
     if (!product) return { error: `Unknown SKU ${sku}` };
+    if (typeof args.pricePaise === "number" || typeof args.amountPaise === "number" || typeof args.price === "number") {
+      writeAudit({
+        sessionId,
+        type: "agent.price_injection_blocked",
+        explainable: true,
+        bounded: true,
+        gated: true,
+        reason: "Agent/tool tried to pass a price on add_to_cart. Catalog price wins.",
+        data: { sku, args },
+      });
+    }
     mutateCart(sessionId, "add", sku, Number(args.qty) || 1);
+    hintSku(acc, sku);
     acc.products = [toCard(product)];
     acc.upsell = pickCartUpsell(sessionId);
-    const remaining = getMandateForSession(sessionId).remainingPaise - priceCart(getCart(sessionId)).payablePaise;
-    acc.crossSell = pickPairs([product], remaining, new Set(getCart(sessionId).map((l) => l.sku))).map(toCard);
     const priced = priceCart(getCart(sessionId));
+    const remaining = getMandateForSession(sessionId).remainingPaise - priced.payablePaise;
+    acc.crossSell = pickPairs([product], remaining, new Set(getCart(sessionId).map((l) => l.sku))).map(toCard);
+    if (acc.upsell) hintSku(acc, acc.upsell.sku);
+    for (const p of acc.crossSell) hintSku(acc, p.sku);
     return {
       ok: true,
       name: product.name,
-      priceInr: formatInr(product.pricePaise),
-      cartPayableInr: formatInr(priced.payablePaise),
-      upgrade: acc.upsell
-        ? { name: acc.upsell.name, priceInr: formatInr(acc.upsell.pricePaise) }
-        : null,
-      pairs: acc.crossSell.map((p) => ({ name: p.name, priceInr: formatInr(p.pricePaise) })),
+      price: pRef(product.sku),
+      cartPayable: cartPayableRef(),
+      upgrade: acc.upsell ? { sku: acc.upsell.sku, name: acc.upsell.name, price: pRef(acc.upsell.sku) } : null,
+      pairs: acc.crossSell.map((p) => ({ sku: p.sku, name: p.name, price: pRef(p.sku) })),
+      note: PRICE_TOKEN_HELP,
     };
   }
   if (name === "remove_from_cart") {
@@ -136,25 +165,43 @@ async function runTool(sessionId: string, name: string, args: Record<string, unk
     return { ok: true };
   }
   if (name === "get_cart") {
-    const mandate = getMandateForSession(sessionId);
     const priced = priceCart(getCart(sessionId));
+    for (const l of priced.lines) hintSku(acc, l.sku);
     return {
       lines: priced.lines.map((l) => ({
         sku: l.sku,
         name: l.name,
         qty: l.qty,
-        priceInr: formatInr(l.linePaise),
+        price: lineRef(l.sku),
       })),
-      payableInr: formatInr(priced.payablePaise),
-      remainingInr: formatInr(mandate.remainingPaise),
-      maxInr: formatInr(mandate.maxPaise),
+      payable: cartPayableRef(),
+      remaining: mandateRemainingRef(),
+      max: mandateMaxRef(),
+      note: PRICE_TOKEN_HELP,
     };
   }
   if (name === "quote_checkout") {
+    if (
+      typeof args.amountPaise === "number" ||
+      typeof args.amount === "number" ||
+      typeof args.pricePaise === "number" ||
+      typeof args.payablePaise === "number"
+    ) {
+      writeAudit({
+        sessionId,
+        type: "agent.amount_injection_blocked",
+        explainable: true,
+        bounded: true,
+        gated: true,
+        reason: "Agent tried to pass an amount into quote_checkout. Ignored — server prices cart only.",
+        data: { args },
+      });
+    }
     const result = await quoteCheckout(sessionId);
     if (result.status === 400) return result.body;
     acc.quote = result.body;
-    return result.body;
+    for (const l of result.body.breakdown.lines) hintSku(acc, l.sku);
+    return quoteSummaryForLlm(result.status, result.body.error);
   }
   return { error: `Unknown tool ${name}` };
 }
@@ -170,25 +217,25 @@ export async function runOpenAIBuyer(sessionId: string, text: string): Promise<C
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
 
-  const mandate = getMandateForSession(sessionId);
   const wantsPay = /\b(pay|checkout|place order|buy now|settle|complete payment)\b/i.test(text);
   const system = `You are the buyer agent for Circuit, a gaming desk store in Bengaluru.
-You shop and you settle. Never invent SKUs or prices.
-CRITICAL: Tool results include priceInr (e.g. "₹599"). Quote ONLY those strings. Never do math on pricePaise — paise are 1/100 of a rupee (59900 paise = ₹599, NOT ₹5,990).
-Buyer spend is gated by a signed mandate the human set: max ${formatInr(mandate.maxPaise)}, remaining ${formatInr(mandate.remainingPaise)}.
+You shop and you settle. Never invent SKUs.
+PRICE SECURITY: ${PRICE_TOKEN_HELP}
+Example: "Harpy is {{p:harpy-black-light-weight-rgb-gaming-mouse}}." Never "Harpy is ₹599" or any other digits.
+Buyer spend is gated by a signed mandate: max {{mandate.max}}, remaining {{mandate.remaining}} (tokens — do not invent numbers).
 If they want an Obsidian monitor or a chair over remaining budget, say so and do not fight the gate.
 The UI already renders product cards. Your text is 1–2 short sentences. No markdown, no **stars**, no Price/Short lists.
-Always mention a step-up (upgrade) and one pair-with item when the tool returns them.
-When they want to pay / checkout / settle / buy the cart, you MUST call quote_checkout. Do not tell them to click a Checkout button.
-After a 402, say you created the Razorpay Order and a human must confirm the card in Razorpay (PCI). You never enter card numbers.
-After a 403 (mandate_exceeded / expired / bad signature), no Order was created. If the quote includes negotiate suggestions, propose ONE concrete counter in your own voice (remove X or swap to Y) and offer to apply it with tools — you are still the same buyer agent, not a second negotiator.
+Always mention a step-up (upgrade) and one pair-with item when the tool returns them — use their price tokens.
+When they want to pay / checkout / settle / buy the cart, you MUST call quote_checkout with NO arguments. Do not tell them to click a Checkout button. Never pass amount/price fields.
+After a 402, say you created the Razorpay Order for {{cart.payable}} and a human must confirm the card in Razorpay (PCI). You never enter card numbers.
+After a 403 (mandate_exceeded / expired / bad signature), no Order was created. If negotiate tips appear in tools, propose ONE concrete counter and apply it with tools — same buyer agent, not a second negotiator.
 If mandate expired, tell them to re-authorise a spend cap in Cart.`;
 
   const messages: OaiMessage[] = [
     { role: "system", content: system },
     { role: "user", content: text },
   ];
-  const acc: ToolAcc = { products: [] };
+  const acc: ToolAcc = { products: [], hintedSkus: [] };
 
   for (let i = 0; i < 6; i++) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -242,12 +289,28 @@ If mandate expired, tell them to re-authorise a spend cap in Cart.`;
     }
     if (wantsPay && !acc.quote) {
       const result = await quoteCheckout(sessionId);
-      if (result.status !== 400) acc.quote = result.body;
+      if (result.status !== 400) {
+        acc.quote = result.body;
+        for (const l of result.body.breakdown.lines) hintSku(acc, l.sku);
+      }
+    }
+    const rawText = stripClerkMarkdown(msg.content?.trim() || "Done.");
+    const { text: safeText, scrubbed } = finalizeAgentPrices(rawText, sessionId, acc.hintedSkus);
+    if (scrubbed) {
+      writeAudit({
+        sessionId,
+        type: "agent.price_scrubbed",
+        explainable: true,
+        bounded: true,
+        gated: true,
+        reason: "Agent reply contained ₹ digits not in catalog/cart/mandate storage. Replaced with [store price].",
+        data: { before: rawText.slice(0, 240), after: safeText.slice(0, 240) },
+      });
     }
     return {
       id: crypto.randomUUID(),
       role: "assistant",
-      text: stripClerkMarkdown(msg.content?.trim() || "Done."),
+      text: safeText,
       products: acc.products.length ? acc.products : undefined,
       upsell: acc.upsell,
       crossSell: acc.crossSell?.length ? acc.crossSell : undefined,

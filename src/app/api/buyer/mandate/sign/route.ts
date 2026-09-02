@@ -3,6 +3,10 @@ import { getMandateForSession } from "@/lib/cart";
 import { getDb, getOrCreateSession, saveDb } from "@/lib/store";
 import { issueMandate } from "@/lib/mandate-signer";
 import { writeAudit } from "@/lib/audit";
+import { clientKey, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+
+const MIN_MANDATE_PAISE = 100_00; // ₹100
+const MAX_MANDATE_PAISE = 500_000_00; // ₹5,00,000
 
 /**
  * Buyer signing authority surface. Merchant gate verifies with the public key only.
@@ -15,6 +19,23 @@ export async function POST(request: Request) {
   };
   if (!body.sessionId || !body.maxPaise) {
     return NextResponse.json({ error: "sessionId and maxPaise required" }, { status: 400 });
+  }
+  const limited = rateLimit(`mandate:${clientKey(request, body.sessionId)}`, 10, 60_000);
+  if (!limited.ok) {
+    return NextResponse.json(rateLimitResponse(limited.retryAfterSec), {
+      status: 429,
+      headers: { "Retry-After": String(limited.retryAfterSec) },
+    });
+  }
+  if (
+    !Number.isFinite(body.maxPaise) ||
+    body.maxPaise < MIN_MANDATE_PAISE ||
+    body.maxPaise > MAX_MANDATE_PAISE
+  ) {
+    return NextResponse.json(
+      { error: `maxPaise must be between ${MIN_MANDATE_PAISE} and ${MAX_MANDATE_PAISE}.` },
+      { status: 400 },
+    );
   }
   const session = getOrCreateSession(body.sessionId);
   const db = getDb();
