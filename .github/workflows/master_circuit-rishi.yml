@@ -44,6 +44,7 @@ jobs:
           test -f deploy/server.js
           test -f deploy/start.js
           test -f deploy/.next/BUILD_ID
+          test -f deploy/.next/routes-manifest.json
           test -f deploy/.next/server/app/index.html
           grep -q "Gaming-desk shop" deploy/.next/server/app/index.html
           echo "BUILD_ID=$(cat deploy/.next/BUILD_ID)"
@@ -51,7 +52,7 @@ jobs:
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('deploy/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node start.js'; fs.writeFileSync('deploy/package.json', JSON.stringify(p,null,2));"
           # Zip explicitly so hidden .next/ survives artifact + Kudu deploy.
           (cd deploy && zip -ryq ../site.zip .)
-          unzip -l site.zip | grep -E '\.next/BUILD_ID|server\.js|start\.js'
+          unzip -l site.zip | grep -E '\.next/BUILD_ID|\.next/routes-manifest|server\.js|start\.js'
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -76,6 +77,7 @@ jobs:
           set -euo pipefail
           unzip -q site.zip -d site
           test -f site/.next/BUILD_ID
+          test -f site/.next/routes-manifest.json
           test -f site/server.js
           test -f site/start.js
           test -f site/.deployment
@@ -86,7 +88,7 @@ jobs:
         with:
           app-name: circuit-rishi
           slot-name: Production
-          package: site
+          package: site.zip
           clean: true
           restart: true
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_933EB48F75FF44D780C0C1EE2DB36F6B }}
