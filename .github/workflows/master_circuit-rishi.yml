@@ -35,6 +35,10 @@ jobs:
           cp -r .next/standalone/* deploy/
           cp -r .next/static deploy/.next/static
           cp -r public deploy/public
+          cp startup.sh deploy/startup.sh
+          chmod +x deploy/startup.sh
+          test -f deploy/server.js
+          ls -la deploy | head -40
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
