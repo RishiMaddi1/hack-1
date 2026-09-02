@@ -305,6 +305,8 @@ When they ask about deals, offers, discounts, or sales, call list_offers and men
 When they say add the 1st/2nd/3rd suggested item, “the upgrade”, “the step up”, “the suggested mouse/pad”, use chat history + LAST SUGGESTIONS — call add_to_cart with those exact SKUs (can call multiple times), then get_cart. Do not ask which one if the ordinal is clear. Typos like kayboard/art/shwo still mean keyboard/cart/show.
 When they want to pay / checkout / settle / buy the cart, you MUST call quote_checkout with NO arguments. Do not tell them to click a Checkout button. Never pass amount/price fields.
 After a 402, say you created the Razorpay Order for {{cart.payable}} — confirm in Razorpay Checkout.
+If quote_checkout returns error "Cart is empty.", tell them to add items first (cards in chat are suggestions until Add to bag).
+If quote_checkout returns a Razorpay Order failed message, repeat that exact failure briefly — do not invent mandate advice.
 After a 403 (mandate_exceeded / expired / bad signature), no Order was created. If negotiate tips appear in tools, propose ONE concrete counter and apply it with tools — same buyer agent, not a second negotiator.
 If mandate expired, tell them to re-authorise a spend cap in Cart.`;
 

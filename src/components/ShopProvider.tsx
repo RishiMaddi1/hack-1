@@ -371,9 +371,19 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         setMessages((m) => [...m, { id: crypto.randomUUID(), role: "assistant", text: failed }]);
         setAskOpen(true);
       });
-      rzp.open();
+      // Close our overlay first — Razorpay Checkout sits under the buyer-agent drawer otherwise.
+      setAskOpen(false);
+      setCartOpen(false);
+      await new Promise((r) => setTimeout(r, 80));
+      try {
+        rzp.open();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Could not open Razorpay Checkout.";
+        setNotice(detail);
+        setAskOpen(true);
+      }
     },
-    [sid, keysOn, refresh, token],
+    [sid, keysOn, refresh, token, setAskOpen, setCartOpen],
   );
 
   const send = useCallback(
