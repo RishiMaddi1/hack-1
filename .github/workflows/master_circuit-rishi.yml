@@ -37,7 +37,11 @@ jobs:
           cp -r public deploy/public
           cp startup.sh deploy/startup.sh
           chmod +x deploy/startup.sh
+          # Azure Oryx ignores custom startup and runs `npm start` — make that
+          # call standalone server.js (next CLI is not in the slim bundle).
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('deploy/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node server.js'; fs.writeFileSync('deploy/package.json', JSON.stringify(p,null,2));"
           test -f deploy/server.js
+          grep -n '"start"' deploy/package.json
           ls -la deploy | head -40
 
       - name: Upload artifact for deployment job
