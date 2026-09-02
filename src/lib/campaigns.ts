@@ -71,7 +71,7 @@ export function applyCampaign(
     };
   }
 
-  return { discountPaise: 0, explanation: "No live campaign matched this cart." };
+  return { discountPaise: 0, explanation: "" };
 }
 
 function eligibleSubtotal(products: Product[], campaign: Campaign): number {

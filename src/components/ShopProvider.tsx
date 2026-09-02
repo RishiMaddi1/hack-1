@@ -1,6 +1,7 @@
 "use client";
 
 import Script from "next/script";
+import { usePathname } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -13,6 +14,13 @@ import {
 import { getProduct } from "@/lib/catalog";
 import { formatInr } from "@/lib/money";
 import type { ChatMessage, Mandate, U402Quote } from "@/lib/types";
+import { ShopperGate, clearStoredShopper, persistShopper, readStoredShopper, type ShopperAuth } from "./ShopperGate";
+
+const HELLO_MESSAGE: ChatMessage = {
+  id: "hello",
+  role: "assistant",
+  text: "Tell me the desk — mouse, keyboard, pad — and I’ll search and add. Ask what’s in the bag or about offers anytime. Type pay when you’re ready to quote Razorpay.",
+};
 
 export type Priced = {
   lines: Array<{ sku: string; name: string; qty: number; unitPaise: number; linePaise: number }>;
@@ -31,18 +39,12 @@ declare global {
   }
 }
 
-function readSession() {
-  const key = "u402_session";
-  let id = localStorage.getItem(key);
-  if (!id) {
-    id = `ses_${crypto.randomUUID().slice(0, 12)}`;
-    localStorage.setItem(key, id);
-  }
-  return id;
-}
-
 type ShopContext = {
   sid: string;
+  username: string | null;
+  /** True while restoring session from storage on /shop */
+  authLoading: boolean;
+  isSignedIn: boolean;
   priced: Priced | null;
   mandate: Mandate | null;
   quote: U402Quote | null;
@@ -64,6 +66,8 @@ type ShopContext = {
   openRazorpayForQuote: (body: U402Quote) => Promise<void>;
   setCap: (maxPaise: number) => Promise<void>;
   simulate: (ok: boolean) => Promise<void>;
+  openLogin: () => void;
+  logout: () => void;
 };
 
 const Ctx = createContext<ShopContext | null>(null);
@@ -74,17 +78,25 @@ export function useShop() {
   return ctx;
 }
 
+function authHeaders(token: string, json = true): HeadersInit {
+  const h: Record<string, string> = { "X-Shopper-Token": token };
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
+
 export function ShopProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const needsShopperGate = pathname === "/shop" || pathname.startsWith("/shop/");
+  const [auth, setAuth] = useState<ShopperAuth | null>(null);
+  const [gateDone, setGateDone] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false);
+  const [gateMode, setGateMode] = useState<"register" | "login">("register");
+  /** False until we've checked localStorage /me — avoids signup flash on hard refresh. */
+  const [authReady, setAuthReady] = useState(false);
   const [sid, setSid] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "hello",
-      role: "assistant",
-      text: "Tell me the desk. I’ll search, add, and stay inside your spend mandate.\nWhen you’re ready, type pay — I create the Razorpay Order. You only confirm the card. That’s the gate.",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([HELLO_MESSAGE]);
   const [priced, setPriced] = useState<Priced | null>(null);
   const [mandate, setMandate] = useState<Mandate | null>(null);
   const [quote, setQuote] = useState<U402Quote | null>(null);
@@ -92,34 +104,119 @@ export function ShopProvider({ children }: { children: ReactNode }) {
   const [llmOn, setLlmOn] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
-  const [askOpen, setAskOpen] = useState(true);
+  const [askOpen, setAskOpen] = useState(false);
 
-  const refresh = useCallback(async (id: string) => {
-    const res = await fetch(`/api/cart?sessionId=${id}`);
+  const token = auth?.shopperToken || "";
+
+  const refresh = useCallback(async (tok: string) => {
+    const res = await fetch("/api/cart", { headers: { "X-Shopper-Token": tok } });
+    if (!res.ok) return;
     const data = (await res.json()) as { priced: Priced; mandate: Mandate };
     setPriced(data.priced);
     setMandate(data.mandate);
   }, []);
 
   useEffect(() => {
-    const id = readSession();
-    setSid(id);
-    void refresh(id);
     void fetch("/api/status")
       .then((r) => r.json())
       .then((s: { razorpayTest: boolean; llm: boolean }) => {
         setKeysOn(s.razorpayTest);
         setLlmOn(s.llm);
       });
+    const stored = readStoredShopper();
+    if (!stored) {
+      setGateDone(false);
+      setAuthReady(true);
+      return;
+    }
+    void fetch("/api/shoppers", {
+      method: "POST",
+      headers: authHeaders(stored.token),
+      body: JSON.stringify({ action: "me" }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          setGateDone(false);
+          return;
+        }
+        if (!data.budgetSet) {
+          setAuth({
+            username: data.username,
+            shopperToken: stored.token,
+            sessionId: data.sessionId,
+            budgetSet: false,
+          });
+          setGateDone(false);
+          return;
+        }
+        persistShopper(data.username, stored.token, data.sessionId);
+        setAuth({
+          username: data.username,
+          shopperToken: stored.token,
+          sessionId: data.sessionId,
+          budgetSet: true,
+        });
+        setSid(data.sessionId);
+        setGateDone(true);
+        setAskOpen(true);
+        await refresh(stored.token);
+      })
+      .catch(() => setGateDone(false))
+      .finally(() => setAuthReady(true));
   }, [refresh]);
+
+  const onGateReady = useCallback(
+    (next: ShopperAuth) => {
+      persistShopper(next.username, next.shopperToken, next.sessionId);
+      setAuth(next);
+      setSid(next.sessionId);
+      setGateDone(true);
+      setGateOpen(false);
+      setAskOpen(true);
+      void refresh(next.shopperToken);
+      setMessages((m) => [
+        ...m,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: `Signed in as ${next.username}. Budget is set — search, add, ask about offers, then type pay.`,
+        },
+      ]);
+    },
+    [refresh],
+  );
+
+  const openLogin = useCallback(() => {
+    setCartOpen(false);
+    setAskOpen(false);
+    setGateMode("login");
+    setGateOpen(true);
+  }, []);
+
+  const logout = useCallback(() => {
+    clearStoredShopper();
+    setAuth(null);
+    setSid("");
+    setGateDone(false);
+    setGateMode("login");
+    setGateOpen(true);
+    setPriced(null);
+    setMandate(null);
+    setQuote(null);
+    setNotice(null);
+    setCartOpen(false);
+    setAskOpen(false);
+    setMessages([HELLO_MESSAGE]);
+  }, []);
 
   const addSku = useCallback(
     async (sku: string, fromChat = false) => {
-      if (!sid) return;
+      if (!token || !sid) return;
       await fetch("/api/cart", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, action: "add", sku, qty: 1 }),
+        headers: authHeaders(token),
+        body: JSON.stringify({ action: "add", sku, qty: 1 }),
       });
       const product = getProduct(sku);
       if (fromChat && product) {
@@ -135,22 +232,22 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       } else {
         setCartOpen(true);
       }
-      await refresh(sid);
+      await refresh(token);
     },
-    [sid, refresh],
+    [sid, token, refresh],
   );
 
   const setQty = useCallback(
     async (sku: string, qty: number) => {
-      if (!sid) return;
+      if (!token) return;
       await fetch("/api/cart", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, action: "set", sku, qty }),
+        headers: authHeaders(token),
+        body: JSON.stringify({ action: "set", sku, qty }),
       });
-      await refresh(sid);
+      await refresh(token);
     },
-    [sid, refresh],
+    [token, refresh],
   );
 
   const openRazorpayForQuote = useCallback(
@@ -159,7 +256,12 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       if (!accept || body.error !== "payment_required") return;
 
       if (!keysOn || accept.network === "razorpay_mock") {
-        setNotice("Test keys aren’t loaded. Use simulate success / decline in chat to rehearse.");
+        const link = body.paymentLinkUrl || accept.paymentLinkUrl;
+        setNotice(
+          link
+            ? `Mock / offline keys. Payment link for agents: ${link}. Use simulate in chat to rehearse capture.`
+            : "Test keys aren’t loaded. Use simulate success / decline in chat to rehearse.",
+        );
         setAskOpen(true);
         return;
       }
@@ -222,17 +324,26 @@ export function ShopProvider({ children }: { children: ReactNode }) {
               signature: response.razorpay_signature,
             }),
           });
-          await refresh(sid);
-          const paid = [
-            "Order done.",
-            `Amount ${formatInr(accept.amountPaise)}.`,
-            `Order ${response.razorpay_order_id}.`,
-            `Payment ${response.razorpay_payment_id}.`,
-            `Checkout ${accept.checkoutId}.`,
-            "Cart cleared. Check /audit for the trail.",
-          ].join(" ");
-          setNotice(paid);
-          setMessages((m) => [...m, { id: crypto.randomUUID(), role: "assistant", text: paid }]);
+          await refresh(token);
+          const receipt: NonNullable<ChatMessage["receipt"]> = {
+            amountPaise: accept.amountPaise,
+            orderId: response.razorpay_order_id,
+            paymentId: response.razorpay_payment_id,
+            checkoutId: accept.checkoutId,
+            lines: body.breakdown.lines,
+            campaignName: body.breakdown.campaignName,
+            discountPaise: body.breakdown.discountPaise,
+          };
+          setNotice("Paid — cart cleared.");
+          setMessages((m) => [
+            ...m,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              text: "Paid.",
+              receipt,
+            },
+          ]);
           setQuote(null);
           setAskOpen(true);
         },
@@ -262,26 +373,52 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       });
       rzp.open();
     },
-    [sid, keysOn, refresh],
+    [sid, keysOn, refresh, token],
   );
 
   const send = useCallback(
     async (message?: string) => {
       const payload = (message ?? text).trim();
-      if (!payload || !sid) return;
+      if (!payload || !token) return;
       setText("");
       setBusy(true);
       setAskOpen(true);
       setCartOpen(false);
       setNotice(null);
+      const history = messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-12)
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          text: m.text,
+          skus: m.products?.map((p) => p.sku),
+          upsellSku: m.upsell?.sku,
+          pairSkus: m.crossSell?.map((p) => p.sku),
+        }));
       setMessages((m) => [...m, { id: crypto.randomUUID(), role: "user", text: payload }]);
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, text: payload }),
+        headers: authHeaders(token),
+        body: JSON.stringify({ text: payload, history }),
       });
-      const data = (await res.json()) as { message: ChatMessage };
-      setMessages((m) => [...m, data.message]);
+      const data = (await res.json()) as {
+        message?: ChatMessage;
+        error?: string;
+        messageText?: string;
+      };
+      if (!res.ok || !data.message) {
+        setMessages((m) => [
+          ...m,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            text: (typeof data.error === "string" ? data.error : null) || "Chat blocked — check budget.",
+          },
+        ]);
+        setBusy(false);
+        return;
+      }
+      setMessages((m) => [...m, data.message!]);
       if (data.message.quote) {
         setQuote(data.message.quote);
         if (
@@ -303,23 +440,23 @@ export function ShopProvider({ children }: { children: ReactNode }) {
           await openRazorpayForQuote(data.message.quote);
         }
       }
-      await refresh(sid);
+      await refresh(token);
       setBusy(false);
     },
-    [sid, text, refresh, openRazorpayForQuote],
+    [token, text, messages, refresh, openRazorpayForQuote],
   );
 
   const setCap = useCallback(
     async (maxPaise: number) => {
-      if (!sid) return;
-      await fetch("/api/mandate", {
+      if (!token) return;
+      await fetch("/api/shoppers", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, maxPaise }),
+        headers: authHeaders(token),
+        body: JSON.stringify({ action: "set_budget", maxRupees: maxPaise / 100 }),
       });
-      await refresh(sid);
+      await refresh(token);
     },
-    [sid, refresh],
+    [token, refresh],
   );
 
   const simulate = useCallback(
@@ -358,27 +495,41 @@ export function ShopProvider({ children }: { children: ReactNode }) {
           signature: "mock",
         }),
       });
-      await refresh(sid);
-      const paid = [
-        "Order done.",
-        `Amount ${formatInr(accept.amountPaise)}.`,
-        `Order ${accept.orderId}.`,
-        `Payment ${paymentId}.`,
-        `Checkout ${accept.checkoutId}.`,
-        "Cart cleared. Check /audit for the trail.",
-      ].join(" ");
-      setNotice(paid);
-      setMessages((m) => [...m, { id: crypto.randomUUID(), role: "assistant", text: paid }]);
+      await refresh(token);
+      const receipt: NonNullable<ChatMessage["receipt"]> = {
+        amountPaise: accept.amountPaise,
+        orderId: accept.orderId,
+        paymentId,
+        checkoutId: accept.checkoutId,
+        lines: quote.breakdown.lines,
+        campaignName: quote.breakdown.campaignName,
+        discountPaise: quote.breakdown.discountPaise,
+      };
+      setNotice("Paid — cart cleared.");
+      setMessages((m) => [
+        ...m,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: "Paid.",
+          receipt,
+        },
+      ]);
       setQuote(null);
     },
-    [quote, sid, send, refresh],
+    [quote, sid, send, refresh, token],
   );
 
   const cartCount = priced?.lines.reduce((s, l) => s + l.qty, 0) ?? 0;
+  const isSignedIn = Boolean(gateDone && auth?.budgetSet);
+  const authLoading = needsShopperGate && !authReady;
 
   const value = useMemo(
     () => ({
       sid,
+      username: auth?.username ?? null,
+      authLoading,
+      isSignedIn,
       priced,
       mandate,
       quote,
@@ -400,9 +551,14 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       openRazorpayForQuote,
       setCap,
       simulate,
+      openLogin,
+      logout,
     }),
     [
       sid,
+      auth?.username,
+      authLoading,
+      isSignedIn,
       priced,
       mandate,
       quote,
@@ -421,12 +577,37 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       openRazorpayForQuote,
       setCap,
       simulate,
+      openLogin,
+      logout,
     ],
   );
+
+  const showGate =
+    needsShopperGate &&
+    authReady &&
+    (gateOpen || !gateDone || (auth != null && !auth.budgetSet));
 
   return (
     <Ctx.Provider value={value}>
       <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+      {authLoading ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-bg/90 backdrop-blur-sm">
+          <div className="border border-line bg-card px-8 py-6 text-center shadow-none">
+            <p className="font-[family-name:var(--font-serif)] text-xl text-fg">Circuit</p>
+            <p className="mt-3 text-sm text-muted">Checking your shopper session…</p>
+            <div className="mx-auto mt-4 h-1 w-24 overflow-hidden rounded-full bg-line">
+              <div className="h-full w-1/2 animate-pulse rounded-full bg-fg" />
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showGate && (
+        <ShopperGate
+          onReady={onGateReady}
+          resume={auth && !auth.budgetSet ? auth : null}
+          initialMode={gateMode}
+        />
+      )}
       {children}
     </Ctx.Provider>
   );

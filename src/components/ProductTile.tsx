@@ -8,10 +8,12 @@ export function ProductTile({
   product,
   onAdd,
   salePaise,
+  addDisabled = false,
 }: {
   product: Product;
   onAdd: (sku: string) => void;
   salePaise?: number;
+  addDisabled?: boolean;
 }) {
   return (
     <article className="group flex flex-col">
@@ -41,8 +43,9 @@ export function ProductTile({
         </div>
         <button
           type="button"
+          disabled={addDisabled}
           onClick={() => onAdd(product.sku)}
-          className="mt-3 w-full border border-fg py-2 text-sm hover:bg-fg hover:text-bg"
+          className="mt-3 w-full border border-fg py-2 text-sm hover:bg-fg hover:text-bg disabled:cursor-not-allowed disabled:opacity-40"
         >
           Add to bag
         </button>

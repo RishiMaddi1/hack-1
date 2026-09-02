@@ -45,6 +45,21 @@ export type Campaign = {
   active: boolean;
 };
 
+export type Shopper = {
+  id: string;
+  username: string;
+  tokenHash: string;
+  sessionId: string;
+  createdAt: string;
+};
+
+export type MerchantRecord = {
+  id: string;
+  name: string;
+  mcpPath: string;
+  catalogPath: string;
+};
+
 export type AuditEvent = {
   id: string;
   at: string;
@@ -55,6 +70,9 @@ export type AuditEvent = {
   gated: boolean;
   reason: string;
   data: Record<string, unknown>;
+  /** Hash chain — sha256(prevHash + canonical body) */
+  prevHash?: string;
+  hash?: string;
 };
 
 export type CheckoutRecord = {
@@ -94,7 +112,10 @@ export type U402Quote = {
     keyId: string;
     checkoutId: string;
     maxTimeoutSeconds: number;
+    /** Headless / MCP agents hand this URL to the human */
+    paymentLinkUrl?: string;
   }>;
+  paymentLinkUrl?: string;
   mandate: {
     id: string;
     maxPaise: number;
@@ -129,9 +150,22 @@ export type ChatMessage = {
   role: "user" | "assistant" | "system";
   text: string;
   products?: ChatProductCard[];
+  /** When set, products section is titled as the live bag */
+  showCart?: boolean;
   upsell?: ChatProductCard;
   crossSell?: ChatProductCard[];
   quote?: U402Quote;
+  /** Post-capture receipt — same visual language as the HTTP 402 quote card */
+  receipt?: {
+    amountPaise: number;
+    orderId: string;
+    paymentId: string;
+    checkoutId: string;
+    lines: CheckoutRecord["lines"];
+    campaignName?: string;
+    discountPaise?: number;
+  };
+  offerNote?: string;
 };
 
 export type GrowthRow = {

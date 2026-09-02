@@ -11,20 +11,47 @@ export async function POST(request: Request) {
   }
   const event = JSON.parse(raw) as {
     event?: string;
-    payload?: { payment?: { entity?: { id?: string; order_id?: string; status?: string } } };
+    payload?: {
+      payment?: {
+        entity?: {
+          id?: string;
+          order_id?: string;
+          status?: string;
+          notes?: Record<string, string>;
+        };
+      };
+      payment_link?: {
+        entity?: {
+          id?: string;
+          notes?: Record<string, string>;
+          order_id?: string;
+        };
+      };
+    };
   };
   const payment = event.payload?.payment?.entity;
+  const link = event.payload?.payment_link?.entity;
+  const notes = payment?.notes || link?.notes || {};
   writeAudit({
-    sessionId: "webhook",
+    sessionId: notes.sessionId || "webhook",
     type: event.event || "webhook",
     explainable: true,
     bounded: true,
     gated: true,
     reason: `Razorpay webhook ${event.event}`,
-    data: { paymentId: payment?.id, orderId: payment?.order_id },
+    data: {
+      paymentId: payment?.id,
+      orderId: payment?.order_id || link?.order_id || notes.orderId,
+      checkoutId: notes.checkoutId,
+    },
   });
-  if (payment?.order_id && payment.id) {
-    markWebhook(payment.order_id, payment.id, event.event === "payment.captured");
+  const orderId = payment?.order_id || link?.order_id || notes.orderId || "";
+  const paymentId = payment?.id || "";
+  if (paymentId && (orderId || notes.checkoutId)) {
+    markWebhook(orderId, paymentId, event.event === "payment.captured" || event.event === "payment_link.paid", {
+      checkoutId: notes.checkoutId,
+      sessionId: notes.sessionId,
+    });
   }
   return NextResponse.json({ ok: true });
 }

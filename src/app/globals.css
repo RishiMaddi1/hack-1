@@ -11,6 +11,17 @@
   --danger: #b91c1c;
 }
 
+html.dark {
+  --bg: #161412;
+  --fg: #f3eee6;
+  --muted: #a8a29e;
+  --card: #1f1c19;
+  --line: #3a342e;
+  --accent: #ea580c;
+  --accent-2: #fb923c;
+  --danger: #f87171;
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-fg: var(--fg);
@@ -25,28 +36,40 @@
   --font-mono: var(--font-mono);
 }
 
-html,
-body {
-  background: var(--bg);
-  color: var(--fg);
-  min-height: 100%;
-}
+/* Base must stay in @layer so Tailwind utilities (e.g. text-bg on links) can win. */
+@layer base {
+  html {
+    font-size: 15px;
+  }
 
-body {
-  font-family: var(--font-sans), "Segoe UI", sans-serif;
-}
+  html,
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100%;
+  }
 
-::selection {
-  background: #fed7aa;
-  color: var(--fg);
-}
+  body {
+    font-family: var(--font-sans), "Segoe UI", sans-serif;
+  }
 
-input,
-textarea,
-button {
-  font: inherit;
-}
+  ::selection {
+    background: #fed7aa;
+    color: var(--fg);
+  }
 
-a {
-  color: inherit;
+  html.dark ::selection {
+    background: #9a3412;
+    color: var(--fg);
+  }
+
+  input,
+  textarea,
+  button {
+    font: inherit;
+  }
+
+  a {
+    color: inherit;
+  }
 }

@@ -7,11 +7,15 @@ import type {
   GrowthRow,
   Mandate,
   CartLine,
+  MerchantRecord,
+  Shopper,
   U402Quote,
 } from "./types";
-import { MERCHANT_ID } from "./catalog";
+import { MERCHANT_ID, MERCHANT_NAME } from "./catalog";
 import { id } from "./ids";
 import { issueMandate } from "./mandate-signer";
+
+export type SessionSuggestItem = { sku: string; name: string };
 
 export type SessionState = {
   id: string;
@@ -20,23 +24,36 @@ export type SessionState = {
   lastCheckoutId?: string;
   lastQuote?: U402Quote;
   declineAttempts: number;
-  /** Set when an upsell SKU was added this session — feeds live AOV */
   acceptedUpsell?: boolean;
+  shopperId?: string;
+  merchantId?: string;
+  /** True only after set_budget / mandate sign with spendable cap */
+  budgetSet?: boolean;
+  /** Last cards shown in buyer agent — for “add the 2nd keyboard / the mouse”. */
+  lastSuggest?: {
+    products: SessionSuggestItem[];
+    upsell?: SessionSuggestItem;
+    crossSell: SessionSuggestItem[];
+    at: string;
+  };
 };
 
-const STORE_SCHEMA = "circuit-kreo-v2";
+const STORE_SCHEMA = "circuit-kreo-v3";
 
-type Db = {
+export type Db = {
   schema: string;
   sessions: Record<string, SessionState>;
   mandates: Record<string, Mandate>;
+  shoppers: Record<string, Shopper>;
+  merchants: Record<string, MerchantRecord>;
   campaigns: Campaign[];
   audit: AuditEvent[];
   checkouts: Record<string, CheckoutRecord>;
   growth: GrowthRow[];
 };
 
-const DATA_DIR = path.join(process.cwd(), "data");
+/** Local: ./data. Azure App Service: set DATA_DIR=/home/data for persistent storage. */
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const DATA_FILE = path.join(DATA_DIR, "runtime.json");
 
 const globalStore = globalThis as unknown as { __u402?: Db };
@@ -75,11 +92,24 @@ function seedGrowth(): GrowthRow[] {
   ];
 }
 
+function seedMerchants(): Record<string, MerchantRecord> {
+  return {
+    [MERCHANT_ID]: {
+      id: MERCHANT_ID,
+      name: MERCHANT_NAME,
+      mcpPath: "/api/mcp",
+      catalogPath: "/api/catalog",
+    },
+  };
+}
+
 function emptyDb(): Db {
   return {
     schema: STORE_SCHEMA,
     sessions: {},
     mandates: {},
+    shoppers: {},
+    merchants: seedMerchants(),
     campaigns: seedCampaigns(),
     audit: [],
     checkouts: {},
@@ -87,13 +117,52 @@ function emptyDb(): Db {
   };
 }
 
+function migrate(parsed: Record<string, unknown>): Db {
+  const base = emptyDb();
+  if (parsed.sessions && typeof parsed.sessions === "object") {
+    base.sessions = parsed.sessions as Db["sessions"];
+  }
+  if (parsed.mandates && typeof parsed.mandates === "object") {
+    base.mandates = parsed.mandates as Db["mandates"];
+  }
+  if (parsed.campaigns && Array.isArray(parsed.campaigns)) {
+    base.campaigns = parsed.campaigns as Campaign[];
+  }
+  if (parsed.audit && Array.isArray(parsed.audit)) {
+    base.audit = parsed.audit as AuditEvent[];
+  }
+  if (parsed.checkouts && typeof parsed.checkouts === "object") {
+    base.checkouts = parsed.checkouts as Db["checkouts"];
+  }
+  if (parsed.growth && Array.isArray(parsed.growth)) {
+    base.growth = parsed.growth as GrowthRow[];
+  }
+  if (parsed.shoppers && typeof parsed.shoppers === "object") {
+    base.shoppers = parsed.shoppers as Db["shoppers"];
+  }
+  if (parsed.merchants && typeof parsed.merchants === "object") {
+    base.merchants = { ...seedMerchants(), ...(parsed.merchants as Db["merchants"]) };
+  }
+  // Legacy sessions without budgetSet: treat existing spendable mandates as budget set
+  for (const s of Object.values(base.sessions)) {
+    if (s.budgetSet === undefined) {
+      const m = base.mandates[s.mandateId];
+      s.budgetSet = Boolean(m && m.maxPaise > 0);
+      s.merchantId = s.merchantId || MERCHANT_ID;
+    }
+  }
+  base.schema = STORE_SCHEMA;
+  return base;
+}
+
 function load(): Db {
   if (globalStore.__u402?.schema === STORE_SCHEMA) return globalStore.__u402;
   try {
     if (existsSync(DATA_FILE)) {
-      const parsed = JSON.parse(readFileSync(DATA_FILE, "utf8")) as Db;
-      if (parsed.schema === STORE_SCHEMA) {
-        globalStore.__u402 = parsed;
+      const parsed = JSON.parse(readFileSync(DATA_FILE, "utf8")) as Record<string, unknown>;
+      if (parsed.schema === STORE_SCHEMA || parsed.schema === "circuit-kreo-v2") {
+        const db = migrate(parsed);
+        globalStore.__u402 = db;
         return globalStore.__u402;
       }
     }
@@ -122,6 +191,10 @@ export function saveDb() {
   persist(load());
 }
 
+/**
+ * Legacy/lab path: create session with a spendable default mandate.
+ * Shopper-registered sessions use createEmptyMandate via shoppers.ts instead.
+ */
 export function getOrCreateSession(sessionId: string): SessionState {
   const db = load();
   if (!db.sessions[sessionId]) {
@@ -132,6 +205,8 @@ export function getOrCreateSession(sessionId: string): SessionState {
       cart: [],
       mandateId: mandate.id,
       declineAttempts: 0,
+      merchantId: MERCHANT_ID,
+      budgetSet: true,
     };
     persist(db);
   }
@@ -142,13 +217,13 @@ export function createDefaultMandate(sessionId: string): Mandate {
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   return issueMandate({
-      id: id("man"),
-      agentId: `agt_${sessionId.slice(0, 8)}`,
-      merchantId: MERCHANT_ID,
-      maxPaise: 800000,
-      remainingPaise: 800000,
-      categories: "*",
-      expiresAt,
-      createdAt,
-    });
+    id: id("man"),
+    agentId: `agt_${sessionId.slice(0, 8)}`,
+    merchantId: MERCHANT_ID,
+    maxPaise: 800000,
+    remainingPaise: 800000,
+    categories: "*",
+    expiresAt,
+    createdAt,
+  });
 }

@@ -1,13 +1,14 @@
 import { PRODUCTS, getProduct } from "./catalog";
 import { getCart, getMandateForSession } from "./cart";
 import { priceCart } from "./quote";
-import { applyCampaign } from "./campaigns";
 import { writeAudit } from "./audit";
 import { formatInr } from "./money";
+import { shelfPricePaise } from "./price-refs";
+import { rememberSuggest } from "./suggest-memory";
 import type { ChatProductCard, Product } from "./types";
 
 export function toCard(p: Product): ChatProductCard {
-  const campaign = applyCampaign([p], p.pricePaise);
+  const shelf = shelfPricePaise(p);
   return {
     sku: p.sku,
     name: p.name,
@@ -15,7 +16,7 @@ export function toCard(p: Product): ChatProductCard {
     details: p.details,
     pricePaise: p.pricePaise,
     image: p.image,
-    discountedPaise: campaign.discountPaise ? p.pricePaise - campaign.discountPaise : undefined,
+    discountedPaise: shelf !== p.pricePaise ? shelf : undefined,
   };
 }
 
@@ -46,27 +47,77 @@ function remainingFor(sessionId: string) {
   return mandate.remainingPaise - priced.payablePaise;
 }
 
-export function pickUpgrade(matches: Product[], remainingPaise: number, query = ""): Product | undefined {
+export function pickUpgrade(
+  matches: Product[],
+  remainingPaise: number,
+  query = "",
+): Product | undefined {
   const cat = matches[0]?.category;
-  if (!cat) return undefined;
+  if (!cat || !matches.length) return undefined;
   const takenSkus = new Set(matches.map((m) => m.sku));
-  const takenModels = new Set(matches.map((m) => modelKey(m.name)));
-  const floor = Math.min(...matches.map((m) => m.pricePaise));
+  // Compare shelf prices so campaign SKUs rank the same way cards do.
+  const maxMatch = Math.max(...matches.map((m) => shelfPricePaise(m)));
   const wantsLight = /light|weight|ultralight/.test(query.toLowerCase());
-  const scored = PRODUCTS.filter((p) => {
+
+  // Same-category step-up: costlier than matches, within mandate remaining.
+  // Search budget ("under 3k") only filters MATCHES — upgrades may be above that budget.
+  const sameCat = PRODUCTS.filter((p) => {
     if (p.category !== cat || takenSkus.has(p.sku)) return false;
-    if (takenModels.has(modelKey(p.name))) return false;
-    if (p.pricePaise <= floor) return false;
-    if (p.pricePaise > remainingPaise) return false;
+    const shelf = shelfPricePaise(p);
+    if (shelf <= maxMatch) return false;
+    if (shelf > remainingPaise) return false;
     return true;
   }).map((p) => {
     const hay = `${p.name} ${p.short} ${p.tags.join(" ")}`.toLowerCase();
+    const shelf = shelfPricePaise(p);
     let score = 0;
     if (wantsLight && /ultralight|48g|49g|55g|lightweight/.test(hay)) score += 5;
-    return { p, score };
+    score -= Math.floor((shelf - maxMatch) / 10000);
+    return { p, score, shelf };
   });
-  scored.sort((a, b) => b.score - a.score || a.p.pricePaise - b.p.pricePaise);
-  return scored[0]?.p;
+  // Prefer nearest step up above the priciest match.
+  sameCat.sort((a, b) => a.shelf - b.shelf || b.score - a.score);
+  if (sameCat[0]) return sameCat[0].p;
+
+  // Truly no costlier SKU in this lane under the mandate → other category only if
+  // matches already include the costliest keyboard/mouse/etc. that fits remaining.
+  const costliestInMandate = PRODUCTS.filter(
+    (p) => p.category === cat && shelfPricePaise(p) <= remainingPaise,
+  ).sort((a, b) => shelfPricePaise(b) - shelfPricePaise(a))[0];
+  if (!costliestInMandate) return undefined;
+  const topShelf = shelfPricePaise(costliestInMandate);
+  const atTop = matches.some(
+    (m) => m.sku === costliestInMandate.sku || shelfPricePaise(m) >= topShelf,
+  );
+  if (!atTop) return undefined;
+
+  return pickCrossCategoryAddon(cat, takenSkus, remainingPaise);
+}
+
+/** Different-category add-on used only when same-lane step-up is exhausted. */
+function pickCrossCategoryAddon(
+  cat: Product["category"],
+  takenSkus: Set<string>,
+  remainingPaise: number,
+): Product | undefined {
+  const candidates: Product[] = [];
+  const add = (p?: Product) => {
+    if (!p || takenSkus.has(p.sku) || p.pricePaise > remainingPaise) return;
+    if (p.category === cat) return;
+    candidates.push(p);
+  };
+  if (cat === "controller") {
+    add(PRODUCTS.find((p) => p.category === "mouse" && p.pricePaise <= remainingPaise));
+  } else if (cat === "mouse") {
+    add(PRODUCTS.find((p) => /mousepad|deskmat/i.test(p.name) && p.pricePaise <= remainingPaise));
+    add(PRODUCTS.find((p) => p.category === "keyboard" && p.pricePaise <= remainingPaise));
+  } else if (cat === "keyboard") {
+    add(PRODUCTS.find((p) => p.category === "mouse" && p.pricePaise <= remainingPaise));
+  } else if (cat === "audio") {
+    add(PRODUCTS.find((p) => /boom arm|shock mount/i.test(p.name) && p.pricePaise <= remainingPaise));
+  }
+  candidates.sort((a, b) => a.pricePaise - b.pricePaise);
+  return candidates[0];
 }
 
 export function pickPairs(matches: Product[], remainingPaise: number, cartSkus: Set<string>): Product[] {
@@ -76,8 +127,8 @@ export function pickPairs(matches: Product[], remainingPaise: number, cartSkus: 
     if (pairs.some((x) => x.sku === p.sku) || matches.some((m) => m.sku === p.sku)) return;
     pairs.push(p);
   };
-  for (const m of matches) add(getProduct(m.upsellSku || ""));
   const cat = matches[0]?.category;
+  // Pairs = different category companions (not the step-up).
   if (cat === "mouse" || cat === "keyboard") {
     add(PRODUCTS.find((p) => /mousepad|deskmat/i.test(p.name) && p.pricePaise <= remainingPaise));
   }
@@ -90,35 +141,24 @@ export function pickPairs(matches: Product[], remainingPaise: number, cartSkus: 
 
 export function pickCartUpsell(sessionId: string): ChatProductCard | undefined {
   const cart = getCart(sessionId);
+  if (!cart.length) return undefined;
   const remaining = remainingFor(sessionId);
-  for (const line of [...cart].reverse()) {
-    const product = getProduct(line.sku);
-    const sku = product?.upsellSku;
-    if (!sku || cart.some((l) => l.sku === sku)) continue;
-    const upsell = getProduct(sku);
-    if (!upsell) continue;
-    if (upsell.pricePaise > remaining) {
-      writeAudit({
-        sessionId,
-        type: "upsell.refused",
-        explainable: true,
-        bounded: true,
-        gated: true,
-        reason: `Refused ${upsell.name} at ${formatInr(upsell.pricePaise)} — remaining after cart is ${formatInr(remaining)}.`,
-        data: { sku, remaining },
-      });
-      continue;
-    }
+  const products = cart.map((l) => getProduct(l.sku)).filter(Boolean) as Product[];
+  // Prefer stepping up the last-added line's category.
+  const focus = [...products].reverse();
+  const upgrade = pickUpgrade(focus.slice(0, 1), remaining);
+  if (upgrade) {
+    if (cart.some((l) => l.sku === upgrade.sku)) return undefined;
     writeAudit({
       sessionId,
       type: "upsell.proposed",
       explainable: true,
       bounded: true,
       gated: true,
-      reason: `Proposed ${upsell.name} (${formatInr(upsell.pricePaise)}) within remaining ${formatInr(remaining)}.`,
-      data: { sku, remaining },
+      reason: `Proposed ${upgrade.name} (${formatInr(upgrade.pricePaise)}) within remaining ${formatInr(remaining)}.`,
+      data: { sku: upgrade.sku, remaining },
     });
-    return toCard(upsell);
+    return toCard(upgrade);
   }
   return undefined;
 }
@@ -126,11 +166,20 @@ export function pickCartUpsell(sessionId: string): ChatProductCard | undefined {
 export function enrichFromSearch(sessionId: string, hits: Product[], query = "", budgetPaise?: number) {
   const remaining = remainingFor(sessionId);
   const cartSkus = new Set(getCart(sessionId).map((l) => l.sku));
-  const unique = uniqueModels(hits, 8);
-  const cat = unique[0]?.category;
-  const inLane = cat ? unique.filter((p) => p.category === cat) : unique;
-  const matches = (budgetPaise ? inLane.filter((p) => p.pricePaise <= budgetPaise) : inLane).slice(0, 3);
-  const seed = matches.length ? matches : inLane.slice(0, 3);
+  const cat = hits[0]?.category;
+  const inLane = cat ? hits.filter((p) => p.category === cat) : hits;
+
+  // Budget uses shelf price (what cards show), not raw list — so ₹3,149 list / ₹2,834 sale still counts as under 3k.
+  const inBudget = budgetPaise
+    ? inLane.filter((p) => shelfPricePaise(p) <= budgetPaise)
+    : inLane;
+  inBudget.sort((a, b) => shelfPricePaise(a) - shelfPricePaise(b));
+
+  // Up to 3 distinct models in budget for MATCHES.
+  const matches = uniqueModels(inBudget, 3);
+  const seed = matches.length ? matches : uniqueModels(inLane, 3);
+
+  // Step-up: costlier than every match, same lane, within mandate (may be over the search budget).
   const upgrade = pickUpgrade(seed, remaining, query);
   const pairs = pickPairs(seed, remaining, cartSkus).filter((p) => p.sku !== upgrade?.sku);
   if (upgrade) {
@@ -140,8 +189,8 @@ export function enrichFromSearch(sessionId: string, hits: Product[], query = "",
       explainable: true,
       bounded: true,
       gated: true,
-      reason: `Step-up ${upgrade.name} (${formatInr(upgrade.pricePaise)}) within remaining ${formatInr(remaining)}.`,
-      data: { sku: upgrade.sku, remaining },
+      reason: `Step-up ${upgrade.name} (${formatInr(shelfPricePaise(upgrade))}) within remaining ${formatInr(remaining)}.`,
+      data: { sku: upgrade.sku, remaining, sameCategory: upgrade.category === seed[0]?.category },
     });
   }
   for (const p of pairs) {
@@ -151,15 +200,17 @@ export function enrichFromSearch(sessionId: string, hits: Product[], query = "",
       explainable: true,
       bounded: true,
       gated: true,
-      reason: `Pair ${p.name} (${formatInr(p.pricePaise)}) with the search results.`,
+      reason: `Pair ${p.name} (${formatInr(shelfPricePaise(p))}) with the search results.`,
       data: { sku: p.sku, remaining },
     });
   }
-  return {
-    products: (matches.length ? matches : seed).map(toCard),
+  const out = {
+    products: seed.map(toCard),
     upsell: upgrade ? toCard(upgrade) : undefined,
     crossSell: pairs.map(toCard),
   };
+  rememberSuggest(sessionId, out);
+  return out;
 }
 
 export function stripClerkMarkdown(text: string) {

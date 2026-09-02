@@ -1,12 +1,12 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { ProductCard } from "@/components/ProductCard";
 import { ChatText } from "@/components/ChatText";
 import { useShop } from "@/components/ShopProvider";
 import { formatInr } from "@/lib/money";
 import { getProduct } from "@/lib/catalog";
-import type { U402Quote } from "@/lib/types";
+import type { ChatMessage, U402Quote } from "@/lib/types";
 
 function QuoteCard({
   quote,
@@ -145,6 +145,63 @@ function QuoteCard({
   );
 }
 
+function PaidReceiptCard({
+  receipt,
+}: {
+  receipt: NonNullable<ChatMessage["receipt"]>;
+}) {
+  const campaignBit =
+    (receipt.discountPaise ?? 0) > 0 && receipt.campaignName
+      ? `${receipt.campaignName} (−${formatInr(receipt.discountPaise!)})`
+      : null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-line bg-bg p-3 text-left text-sm">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Paid · Captured</p>
+      <p className="mt-1 font-[family-name:var(--font-serif)] text-xl">
+        {formatInr(receipt.amountPaise)}
+      </p>
+
+      {receipt.lines.length ? (
+        <ul className="mt-3 space-y-2">
+          {receipt.lines.map((line) => {
+            const image = getProduct(line.sku)?.image;
+            return (
+              <li key={line.sku} className="flex items-center gap-2.5">
+                {image ? (
+                  <img
+                    src={image}
+                    alt=""
+                    className="h-9 w-9 shrink-0 rounded-sm border border-line bg-bg object-cover"
+                  />
+                ) : (
+                  <span className="h-9 w-9 shrink-0 rounded-sm border border-line bg-bg" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium leading-snug text-fg">
+                    {line.qty > 1 ? `${line.qty}× ` : ""}
+                    {line.name}
+                  </p>
+                  <p className="text-[10px] text-muted">{formatInr(line.linePaise)}</p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      {campaignBit ? <p className="mt-2 text-[10px] text-muted">{campaignBit}</p> : null}
+
+      <div className="mt-3 space-y-1 border-t border-line pt-2 font-[family-name:var(--font-mono)] text-[10px] leading-relaxed text-muted">
+        <p>Order {receipt.orderId}</p>
+        <p>Payment {receipt.paymentId}</p>
+        <p>Checkout {receipt.checkoutId}</p>
+      </div>
+      <p className="mt-2 text-xs text-muted">Cart cleared. Trail is on /audit.</p>
+    </div>
+  );
+}
+
 export function CartDrawer() {
   const {
     cartOpen,
@@ -269,16 +326,27 @@ export function AskDrawer() {
     addSku,
     setQty,
     llmOn,
-    quote,
     keysOn,
     openRazorpayForQuote,
     simulate,
     notice,
+    priced,
   } = useShop();
-  const bottom = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const replyStartRef = useRef<HTMLDivElement>(null);
+  const prevLen = useRef(0);
+  const [showGuide, setShowGuide] = useState(true);
+
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy, quote, notice]);
+    if (!askOpen) return;
+    const grew = messages.length > prevLen.current;
+    prevLen.current = messages.length;
+    if (grew && messages[messages.length - 1]?.role === "assistant") {
+      replyStartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (busy && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, busy, notice, askOpen]);
 
   async function applyNegotiate(
     action: "remove_sku" | "swap_to",
@@ -297,14 +365,14 @@ export function AskDrawer() {
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-fg/30">
       <button type="button" className="flex-1" aria-label="Close chat" onClick={() => setAskOpen(false)} />
-      <aside className="flex h-full w-full max-w-lg flex-col bg-card shadow-xl">
+      <aside className="flex h-full w-full flex-col bg-card shadow-xl sm:w-[min(100%,72vw)] sm:max-w-5xl">
         <div className="border-b border-line px-5 py-4">
           <div className="flex items-start justify-between">
             <div>
               <h2 className="font-[family-name:var(--font-serif)] text-2xl">Buyer agent</h2>
               <p className="text-xs text-muted">
                 {llmOn
-                  ? "Search, cart, 402 quote, Razorpay — type pay when ready."
+                  ? "Search, cart, offers, 402 quote — type pay when ready."
                   : "Keyword mode until an API key loads."}
               </p>
             </div>
@@ -313,68 +381,152 @@ export function AskDrawer() {
             </button>
           </div>
         </div>
-        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
-          {messages.map((m) => (
-            <div key={m.id} className={m.role === "user" ? "text-right" : ""}>
-              <ChatText text={m.text} incoming={m.role === "user"} />
-              {m.products?.length ? (
-                <div className="mt-3 text-left">
-                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">Matches</p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {m.products.map((p) => (
-                      <ProductCard key={p.sku} compact product={p} onAdd={(sku) => void addSku(sku, true)} />
-                    ))}
+        <div ref={scrollRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          {showGuide ? (
+            <div className="border border-line bg-bg p-3">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                  How this agent works
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowGuide(false)}
+                  className="text-[11px] text-muted hover:text-fg"
+                >
+                  Got it
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-4 gap-1">
+                {[
+                  { n: "1", t: "Ask", prompt: "wireless mouse under 2000" },
+                  { n: "2", t: "Offers", prompt: "any offers?" },
+                  { n: "3", t: "Bag", prompt: "what's in my bag" },
+                  { n: "4", t: "Pay", prompt: "pay" },
+                ].map((s) => (
+                  <button
+                    key={s.n}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void send(s.prompt)}
+                    className="border border-line px-1.5 py-2 text-center hover:border-fg disabled:opacity-40"
+                  >
+                    <p className="font-mono text-[10px] text-muted">{s.n}</p>
+                    <p className="mt-0.5 text-[11px] font-medium">{s.t}</p>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-3 text-sm leading-snug text-muted">
+                Tap a step to run it. Grid “Add to bag” still works — this panel is the chat path.
+              </p>
+            </div>
+          ) : null}
+
+          {priced?.lines.length ? (
+            <p className="text-[11px] text-muted">
+              Bag:{" "}
+              {priced.lines
+                .map((l) => `${l.qty}× ${l.name.split(" ").slice(0, 3).join(" ")}`)
+                .join(" · ")}{" "}
+              · {formatInr(priced.payablePaise)}
+            </p>
+          ) : null}
+
+          {messages.map((m, idx) => {
+            const isLastAssistant = m.role === "assistant" && idx === messages.length - 1;
+            return (
+              <div
+                key={m.id}
+                ref={isLastAssistant ? replyStartRef : undefined}
+                className={m.role === "user" ? "text-right" : ""}
+              >
+                {m.receipt && (!m.text || m.text === "Paid.") ? null : (
+                  <ChatText text={m.text} incoming={m.role === "user"} />
+                )}
+                {m.offerNote ? (
+                  <p className="mt-2 text-left text-xs text-accent">{m.offerNote}</p>
+                ) : null}
+                {m.products?.length ? (
+                  <div className="mt-3 text-left">
+                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+                      {m.showCart ? "In your bag" : "Matches"}
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {m.products.map((p) => (
+                        <ProductCard
+                          key={p.sku}
+                          compact
+                          product={p}
+                          onAdd={(sku) => void addSku(sku, true)}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ) : null}
-              {m.upsell ? (
-                <div className="mt-4 text-left">
-                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-                    A step up — still inside your cap
-                  </p>
-                  <div className="max-w-xs">
-                    <ProductCard
-                      compact
-                      product={m.upsell}
-                      badge="Upgrade"
-                      onAdd={(sku) => void addSku(sku, true)}
-                    />
-                  </div>
-                </div>
-              ) : null}
-              {m.crossSell?.length ? (
-                <div className="mt-4 text-left">
-                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-                    Often bought together
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {m.crossSell.map((p) => (
+                ) : null}
+                {m.upsell ? (
+                  <div className="mt-4 text-left">
+                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+                      {(() => {
+                        const upCat = getProduct(m.upsell!.sku)?.category;
+                        const matchCat = m.products?.[0]
+                          ? getProduct(m.products[0].sku)?.category
+                          : upCat;
+                        return upCat && matchCat && upCat === matchCat
+                          ? "A step up — costlier in this lane"
+                          : "Top of this lane — different category instead";
+                      })()}
+                    </p>
+                    <div className="max-w-xs">
                       <ProductCard
-                        key={p.sku}
                         compact
-                        product={p}
-                        badge="Pair"
+                        product={m.upsell}
+                        badge={
+                          getProduct(m.upsell.sku)?.category ===
+                          (m.products?.[0] ? getProduct(m.products[0].sku)?.category : undefined)
+                            ? "Upgrade"
+                            : "Also"
+                        }
                         onAdd={(sku) => void addSku(sku, true)}
                       />
-                    ))}
+                    </div>
                   </div>
-                </div>
-              ) : null}
-              {m.quote ? (
-                <QuoteCard
-                  quote={m.quote}
-                  keysOn={keysOn}
-                  onPayAgain={() => void openRazorpayForQuote(m.quote!)}
-                  onSimulate={(ok) => void simulate(ok)}
-                  onNegotiate={(action, sku, replaceSku) => void applyNegotiate(action, sku, replaceSku)}
-                />
-              ) : null}
-            </div>
-          ))}
+                ) : null}
+                {m.crossSell?.length ? (
+                  <div className="mt-4 text-left">
+                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+                      Often bought together
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {m.crossSell.map((p) => (
+                        <ProductCard
+                          key={p.sku}
+                          compact
+                          product={p}
+                          badge="Pair"
+                          onAdd={(sku) => void addSku(sku, true)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {m.quote ? (
+                  <QuoteCard
+                    quote={m.quote}
+                    keysOn={keysOn}
+                    onPayAgain={() => void openRazorpayForQuote(m.quote!)}
+                    onSimulate={(ok) => void simulate(ok)}
+                    onNegotiate={(action, sku, replaceSku) =>
+                      void applyNegotiate(action, sku, replaceSku)
+                    }
+                  />
+                ) : null}
+                {m.receipt ? <PaidReceiptCard receipt={m.receipt} /> : null}
+              </div>
+            );
+          })}
           {busy ? <p className="text-sm text-muted">Working the tools…</p> : null}
           {notice ? <p className="text-xs leading-relaxed text-accent">{notice}</p> : null}
-          <div ref={bottom} />
         </div>
+
         <form
           className="flex gap-2 border-t border-line p-4"
           onSubmit={(e) => {
@@ -385,7 +537,7 @@ export function AskDrawer() {
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Type pay when the cart is ready"
+            placeholder="Ask, add, offers, or type pay"
             className="flex-1 border border-line bg-card px-3 py-2 text-sm outline-none focus:border-fg"
           />
           <button type="submit" disabled={busy} className="bg-fg px-4 py-2 text-sm text-bg disabled:opacity-50">
@@ -396,3 +548,4 @@ export function AskDrawer() {
     </div>
   );
 }
+

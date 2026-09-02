@@ -2,9 +2,9 @@
 
 Razorpay AI Buildathon · Track 01 · AI Growth & Agentic Commerce
 
-**Mandate-gated agentic checkout** for an Indian merchant on **Razorpay test mode**. One buyer agent searches, adds, and triggers pay. The server prices the cart, verifies a **buyer-signed** spend mandate (Ed25519), and only then creates a Razorpay Order (HTTP 402). Human confirms the card. Every rupee is on `/audit`.
+**Mandate-gated agentic checkout** + **MCP rail** so any AI shopper can transact. Shoppers **register a unique username**, **set a budget**, then shop. The server prices the cart, verifies an Ed25519 spend mandate, and creates a Razorpay Order (HTTP 402) + Payment Link. Human confirms. Hash-chained `/audit`.
 
-Not a second agent. Not “works on every website.” Protocol-**shaped** adapter (catalog + mandate + 402 quote) merchants could implement.
+Thesis: Razorpay website builder ships this MCP shape → every merchant becomes AI-transactable. Circuit is the reference shop. Not WhatsApp. Not “works on every website without adopting the shape.”
 
 ## Run
 
@@ -15,41 +15,50 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000/shop](http://localhost:3000/shop).
+Open [http://localhost:3000/shop](http://localhost:3000/shop) → register username → set budget → shop.
 
-- Gate lab (forge / expire / bad webhook): [/lab](http://localhost:3000/lab)
-- Audit + live AOV: [/audit](http://localhost:3000/audit)
+- MCP HTTP: `GET/POST /api/mcp`
+- Discovery: `/.well-known/agent-commerce.json`
+- Gate lab: [/lab](http://localhost:3000/lab)
+- Audit + hash chain: [/audit](http://localhost:3000/audit)
 
-Until keys are in `.env.local`, checkout still quotes a 402 and you can simulate success/decline. After keys are in, typing **pay** opens Razorpay Checkout. The `order_…` / `pay_…` IDs must match the Test Mode dashboard.
-
-Generate a fresh mandate keypair (optional; demo keys ship in code):
+### Claude Desktop / any MCP client (stdio)
 
 ```bash
-node scripts/gen-mandate-keys.mjs
+npm run mcp:stdio
 ```
 
-### Test cards (Razorpay)
+Config sketch:
 
-- Success: `4111 1111 1111 1111` · any future expiry · any CVV
-- Failure (graceful stop demo): use a [failure method](https://razorpay.com/docs/payments/payments/test-card-upi-details/) from the docs, then watch `/audit`
+```json
+{
+  "mcpServers": {
+    "circuit-u402": {
+      "command": "npx",
+      "args": ["tsx", "scripts/mcp-server.ts"],
+      "cwd": "/path/to/hack-1"
+    }
+  }
+}
+```
 
-Webhook URL when you have a tunnel: `https://<host>/api/webhooks/razorpay`  
-Events: `payment.captured`, `payment.failed`
+Or HTTP: `POST http://localhost:3000/api/mcp` with JSON-RPC `tools/list` / `tools/call`.
+
+Flow: `register_shopper` → save `shopper_token` → `set_budget` → `search_catalog` → `add_to_cart` → `quote_checkout` → hand `payment_link_url` to human.
+
+Optional `MCP_SHARED_SECRET` → `Authorization: Bearer …` on `/api/mcp`.
 
 ## Demo script
 
-1. Shop: *Swarm keyboard and Harpy mouse under ₹5000*
-2. Add via agent or tile; accept a bounded upsell if it fits
-3. Type **pay** → 402 → Razorpay test pay → chat shows order/payment IDs
-4. Over-mandate: Obsidian 27" on ₹8,000 cap → **403**, negotiate tips, **no** Order
-5. Decline or dismiss → stop / cart intact
-6. `/lab` forge remaining → signature fail
-7. `/audit` live AOV after real captures
-
-The ₹8,000 default is a **demo human cap**. Track 01 requires money actions bounded and gated — not a Razorpay API limit.
+1. Register as `demo_buyer`, set budget ₹8000
+2. Shop: *Swarm keyboard and Harpy mouse under ₹5000* → pay → Razorpay
+3. Over-mandate → 403 + negotiate
+4. MCP Inspector / Claude: same tools, Payment Link handoff
+5. `/lab` underpay + double-capture
+6. `/audit` chain OK + live AOV
 
 ## Stack
 
-Next.js · TypeScript · Razorpay Node SDK · Ed25519 mandates · file-backed audit log
+Next.js · TypeScript · Razorpay · Ed25519 · `@modelcontextprotocol/sdk` · hash-chained audit
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [PITCH.md](PITCH.md), [TRACK01_VERIFICATION.md](TRACK01_VERIFICATION.md).

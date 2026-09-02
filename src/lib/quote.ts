@@ -52,6 +52,8 @@ export function explainMoney(mandate: Mandate, priced: PricedCart, sessionId?: s
     priced.campaignExplain,
     `Payable ₹${priced.payablePaise / 100}.`,
     gate.reason,
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
   return { gate, explanation };
 }

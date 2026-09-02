@@ -3,7 +3,7 @@ import { spendCampaign } from "./campaigns";
 import { id } from "./ids";
 import { getMandateForSession, mutateCart } from "./cart";
 import { explainMoney, priceCart } from "./quote";
-import { createRazorpayOrder, fetchPayment, hasLiveTestKeys, getKeyId, verifyPaymentSignature } from "./razorpay";
+import { createRazorpayOrder, createPaymentLink, fetchPayment, hasLiveTestKeys, getKeyId, verifyPaymentSignature } from "./razorpay";
 import { getDb, getOrCreateSession, saveDb } from "./store";
 import { issueMandate } from "./mandate-signer";
 import { buildNegotiate } from "./negotiate";
@@ -58,8 +58,15 @@ export async function quoteCheckout(sessionId: string): Promise<
   | { status: 402; body: U402Quote }
   | { status: 403; body: U402Quote }
   | { status: 400; body: { error: string } }
+  | { status: 403; body: { error: string; message: string } }
 > {
   const session = getOrCreateSession(sessionId);
+  if (session.shopperId && !session.budgetSet) {
+    return {
+      status: 403,
+      body: { error: "BUDGET_REQUIRED", message: "Call set_budget before shopping (cart / checkout)." },
+    };
+  }
   if (!session.cart.length) {
     return { status: 400, body: { error: "Cart is empty." } };
   }
@@ -123,6 +130,14 @@ export async function quoteCheckout(sessionId: string): Promise<
     },
   });
 
+  const paymentLink = await createPaymentLink({
+    amountPaise: priced.payablePaise,
+    checkoutId,
+    orderId: order.orderId,
+    sessionId,
+    description: explanation.slice(0, 200),
+  });
+
   const record: CheckoutRecord = {
     id: checkoutId,
     sessionId,
@@ -140,9 +155,11 @@ export async function quoteCheckout(sessionId: string): Promise<
   const db = getDb();
   db.checkouts[checkoutId] = record;
   session.lastCheckoutId = checkoutId;
+  const linkUrl = paymentLink.url || undefined;
   const quote: U402Quote = {
     u402Version: 1,
     error: "payment_required",
+    paymentLinkUrl: linkUrl,
     accepts: [
       {
         scheme: "razorpay_order",
@@ -153,6 +170,7 @@ export async function quoteCheckout(sessionId: string): Promise<
         keyId: getKeyId(),
         checkoutId,
         maxTimeoutSeconds: 300,
+        paymentLinkUrl: linkUrl,
       },
     ],
     mandate: {
@@ -168,7 +186,9 @@ export async function quoteCheckout(sessionId: string): Promise<
       campaignId: priced.campaignId,
       campaignName: priced.campaignName,
       lines: priced.lines,
-      explanation,
+      explanation: paymentLink.error
+        ? `${explanation} ${paymentLink.error}`
+        : explanation,
     },
   };
   session.lastQuote = quote;
@@ -333,15 +353,28 @@ export function failCheckout(sessionId: string, checkoutId: string, reason: stri
   };
 }
 
-export function markWebhook(orderId: string, paymentId: string, ok: boolean) {
+export function markWebhook(
+  orderId: string,
+  paymentId: string,
+  ok: boolean,
+  extras?: { checkoutId?: string; sessionId?: string },
+) {
   const db = getDb();
-  const record = Object.values(db.checkouts).find((c) => c.orderId === orderId);
+  let record = Object.values(db.checkouts).find((c) => c.orderId === orderId);
+  if (!record && extras?.checkoutId) {
+    record = db.checkouts[extras.checkoutId];
+  }
+  if (!record && extras?.sessionId) {
+    record = Object.values(db.checkouts)
+      .filter((c) => c.sessionId === extras.sessionId && c.status === "quoted")
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  }
   if (!record) return;
   if (!ok) {
     failCheckout(record.sessionId, record.id, "Webhook payment.failed");
     return;
   }
-  applyCapture(record, paymentId, orderId, "webhook");
+  applyCapture(record, paymentId, orderId || record.orderId || paymentId, "webhook");
 }
 
 /** Lab: simulate client+webhook both trying to capture — mandate must debit once. */
@@ -398,6 +431,11 @@ export function simulateDoubleCapture(sessionId: string) {
     remainingBefore,
     remainingAfter,
     spent,
+    amountPaise,
+    checkoutId,
+    orderId,
+    firstApplied: first,
+    secondApplied: second,
     message:
       spent === amountPaise && !second
         ? "Webhook and client both fired. Mandate only dropped once."

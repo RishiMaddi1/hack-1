@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.env*
+!.env.example
+data/runtime.json
+README.md
+DEPLOY_AZURE.md
+.cursor
+*.md
+!package.json

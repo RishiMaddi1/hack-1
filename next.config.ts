@@ -1,7 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["finch-ace-happily.ngrok-free.app"],
+  output: "standalone",
+  // Dev tunnels (ngrok etc.) — without this, /_next chunks are blocked and UI never hydrates
+  allowedDevOrigins: [
+    "*.ngrok-free.app",
+    "*.ngrok-free.dev",
+    "*.ngrok.app",
+    "*.ngrok.io",
+  ],
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "images.unsplash.com" },

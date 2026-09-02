@@ -2,16 +2,16 @@ import { NextResponse } from "next/server";
 import { quoteCheckout } from "@/lib/checkout";
 import { writeAudit } from "@/lib/audit";
 import { clientKey, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { authenticateShopper, extractShopperToken, requireBudget } from "@/lib/shoppers";
+import { getDb } from "@/lib/store";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as {
     sessionId?: string;
     amountPaise?: number;
     amount?: number;
+    shopperToken?: string;
   };
-  if (!body.sessionId) {
-    return NextResponse.json({ error: "sessionId required" }, { status: 400 });
-  }
   const limited = rateLimit(`checkout:${clientKey(request, body.sessionId)}`, 15, 60_000);
   if (!limited.ok) {
     return NextResponse.json(rateLimitResponse(limited.retryAfterSec), {
@@ -19,10 +19,31 @@ export async function POST(request: Request) {
       headers: { "Retry-After": String(limited.retryAfterSec) },
     });
   }
-  // LLM / client must never set the Order amount — reject if they try.
+
+  const token = extractShopperToken(request, body as Record<string, unknown>);
+  let sessionId = body.sessionId || "";
+
+  if (token) {
+    const auth = authenticateShopper(token);
+    if (!auth.ok) return NextResponse.json(auth, { status: auth.status });
+    const budget = requireBudget(auth.session);
+    if (budget) return NextResponse.json(budget, { status: budget.status });
+    sessionId = auth.session.id;
+  } else if (!sessionId) {
+    return NextResponse.json({ error: "sessionId or shopperToken required" }, { status: 400 });
+  } else {
+    const session = getDb().sessions[sessionId];
+    if (session?.shopperId) {
+      return NextResponse.json(
+        { error: "SHOPPER_REQUIRED", message: "Pass X-Shopper-Token for this shopper session." },
+        { status: 401 },
+      );
+    }
+  }
+
   if (typeof body.amountPaise === "number" || typeof body.amount === "number") {
     writeAudit({
-      sessionId: body.sessionId,
+      sessionId,
       type: "checkout.amount_injection_blocked",
       explainable: true,
       bounded: true,
@@ -31,6 +52,6 @@ export async function POST(request: Request) {
       data: { attemptedAmountPaise: body.amountPaise ?? body.amount },
     });
   }
-  const result = await quoteCheckout(body.sessionId);
+  const result = await quoteCheckout(sessionId);
   return NextResponse.json(result.body, { status: result.status });
 }

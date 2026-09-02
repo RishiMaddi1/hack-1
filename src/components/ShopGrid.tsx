@@ -16,7 +16,8 @@ function saleFor(product: Product, campaigns: Campaign[]) {
 }
 
 export function ShopGrid({ products }: { products: Product[] }) {
-  const { addSku } = useShop();
+  const { addSku, isSignedIn, authLoading } = useShop();
+  const locked = authLoading || !isSignedIn;
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   useEffect(() => {
     void fetch("/api/campaigns")
@@ -30,7 +31,13 @@ export function ShopGrid({ products }: { products: Product[] }) {
   return (
     <div className="grid grid-cols-2 gap-x-5 gap-y-10 md:grid-cols-3 lg:grid-cols-4">
       {priced.map(({ p, sale }) => (
-        <ProductTile key={p.sku} product={p} salePaise={sale} onAdd={(sku) => void addSku(sku)} />
+        <ProductTile
+          key={p.sku}
+          product={p}
+          salePaise={sale}
+          addDisabled={locked}
+          onAdd={(sku) => void addSku(sku)}
+        />
       ))}
     </div>
   );

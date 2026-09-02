@@ -15,36 +15,38 @@ x402 settles in USDC. ACP is Stripe-shaped. AP2 is card mandates. NPCI UAP is no
 
 ## Layers
 
-1. **Catalog** — agent-readable JSON (`GET /api/catalog`). The buyer agent only sees this.
-2. **Buyer signing authority** — Ed25519 private key in `mandate-signer` / `POST /api/buyer/mandate/sign`. Issues / re-signs mandates. Merchant never holds this key.
-3. **Merchant gate** — `mandate.ts` verifies with the **public** key only, then prices the cart. LLM never chooses the Order amount. Over remaining / expired / bad sig → **403**, no Order.
-4. **Campaign orchestrator** — percent off by category/SKU, budget, dates. Applied before the gate.
-5. **u402 quote** — 402 body with `order_id`, amount, key id, explanation; 403 may include `negotiate` counters for the **same** buyer agent.
-6. **Razorpay** — Checkout + payment signature verify + payment fetch + webhooks.
-7. **Audit** — append-only flight recorder (`/audit`). Live AOV from real captures; seed is baseline only until live rows exist.
-8. **Gate lab** — `/lab` adversarial forge / replay / expire / bad webhook demos.
+1. **Shopper identity** — unique username + `shopper_token` (`/api/shoppers`, MCP `register_shopper` / `login_shopper`). Carts and mandates bind to the shopper.
+2. **Budget before shop** — `set_budget` / Ed25519 mandate required before cart or checkout (`BUDGET_REQUIRED`).
+3. **Catalog** — agent-readable JSON (`GET /api/catalog`). Search allowed after register.
+4. **Buyer signing authority** — Ed25519 private key in `mandate-signer`. Merchant verifies with public key only.
+5. **Merchant gate** — prices cart from catalog; LLM never chooses Order amount. 403 + negotiate on exceed.
+6. **MCP transport** — `/api/mcp` + `npm run mcp:stdio`. Same handlers as HTTP — never a second money path.
+7. **u402 quote** — 402 + Razorpay Order + **Payment Link** for headless agents; Checkout.js for UI.
+8. **Audit** — hash-chained append-only log (`prevHash`/`hash`, `verifyAuditChain`).
+9. **Discovery** — `/.well-known/agent-commerce.json` documents register → budget → shop for any Razorpay-builder merchant shape.
+10. **Gate lab** — `/lab` adversarial demos (sessionId path; shopper UI uses tokens).
 
 ```mermaid
 sequenceDiagram
-  participant Human
-  participant BuyerAgent as BuyerAgent
-  participant Signer as BuyerSigner_Ed25519
+  participant Agent as AI_Shopper_MCP
+  participant Id as ShopperRegistry
   participant Merchant as MerchantGate
   participant Rzp as Razorpay_test
+  participant Human
 
-  Human->>BuyerAgent: Set spend cap / chat shop
-  BuyerAgent->>Signer: Issue mandate
-  Signer-->>Merchant: Signed mandate artifact
-  Human->>BuyerAgent: Type pay
-  BuyerAgent->>Merchant: quote_checkout
-  Merchant->>Merchant: Verify public key; price cart
-  alt over remaining or bad sig or expired
-    Merchant-->>BuyerAgent: 403 plus negotiate tips
+  Agent->>Id: register_shopper username
+  Id-->>Agent: shopper_token
+  Agent->>Id: set_budget
+  Id-->>Merchant: Ed25519 mandate
+  Agent->>Merchant: search add quote_checkout
+  Merchant->>Merchant: Verify mandate priceCart
+  alt over remaining
+    Merchant-->>Agent: 403 negotiate
   else within mandate
-    Merchant->>Rzp: orders.create
-    Merchant-->>Human: 402 quote
-    Human->>Rzp: Confirm card
-    Rzp-->>Merchant: capture or fail
+    Merchant->>Rzp: orders.create plus payment_link
+    Merchant-->>Agent: 402 payment_link_url
+    Agent-->>Human: Open link
+    Human->>Rzp: Pay
   end
 ```
 

@@ -1,19 +1,21 @@
 # 5-minute pitch
 
-0:00 Problem. Agents cannot buy from a normal Indian merchant. Protocols are US/crypto. UAP is not live. We need mandate-gated checkout on Razorpay.
+0:00 Problem. Agents cannot buy from a normal Indian merchant. Protocols are US/crypto. UAP is not live. Razorpay needs a common MCP rail for every builder-made shop.
 
-0:40 Happy path. One buyer agent: “Swarm keyboard and Harpy mouse under ₹5000” → cards → add → mousepad upsell inside the cap → type **pay** → 402 → Razorpay test pay → dashboard `order_` / `pay_` tick. Chat announces order done.
+0:30 Identity. Shopper registers a unique username. Agent holds `shopper_token`. Budget signed before cart unlocks. Carts stay tracked per shopper.
 
-1:40 Inspector. Buyer-signed mandate (Ed25519) vs merchant public-key verify. 402 body, explanation, audit trail. LLM never picked the amount.
+1:00 Happy path (UI). Search → add → pay → 402 → Razorpay → order done. LLM never set the amount (price tokens + server `priceCart`).
 
-2:20 Decline or dismiss. Test failure card or close Checkout. Agent/UI stops. Audit `payment.failed` or `checkout.dismissed`. Cart not duplicated.
+1:40 MCP. Claude Desktop / any agent: same tools, same Gate. `quote_checkout` returns Payment Link for the human. Discovery at `/.well-known/agent-commerce.json`.
 
-2:50 Gate. “Add the Obsidian 27-inch.” Type pay → 403. Same agent offers a substitute (negotiate). No Order in dashboard.
+2:20 Inspector. Ed25519 sign vs verify. Hash-chained audit. Underpay lab still quotes real cart. Double capture debits once.
 
-3:20 Lab. Forge remaining without re-sign → verify fail. Expire mandate → blocked. Signature is load-bearing. Underpay attempt still quotes the real cart. Double capture still debits once.
+2:50 Gate. Over mandate → 403 + negotiate. No Order.
 
-3:50 Growth. `/audit` live AOV with vs without bounded upsell (after real captures).
+3:20 Failure. Decline / dismiss. Cart intact.
 
-4:20 Architecture one-liner. u402 = adapter (catalog + mandate + 402 quote) for Razorpay — not every website; merchants adopt the shape.
+3:40 Growth. `/audit` live AOV.
 
-4:50 Ask. This is the intern who already built the Razorpay-shaped, mandate-gated agentic checkout.
+4:00 Thesis. u402 MCP = what Razorpay website builder should ship so every merchant is AI-transactable. Circuit is the reference implementation — not WhatsApp glue.
+
+4:40 Ask. Hire the intern who built the rail, not another chat widget.

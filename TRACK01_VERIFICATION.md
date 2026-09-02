@@ -32,13 +32,25 @@ npm run dev
 - Catalog JSON: `GET /api/catalog`
 - Campaigns: `http://localhost:3000/campaigns`
 - Buyer sign: `POST /api/buyer/mandate/sign`
+- Shoppers: `POST /api/shoppers` (`register` | `login` | `set_budget` | `me`)
+- MCP: `GET/POST /api/mcp` · stdio `npm run mcp:stdio`
+- Discovery: `/.well-known/agent-commerce.json`
 - Webhook: `POST /api/webhooks/razorpay` (needs public URL + dashboard secret)
 
-**Framing:** mandate-gated agentic checkout; u402 is the adapter shape — not a claim that this works on every shopping website. One buyer agent only (no second LLM).
+**Framing:** mandate-gated agentic checkout + MCP rail; u402 is the adapter shape for Razorpay-builder merchants — not every website without adopting it. Shoppers register a username and set budget before cart. One buyer agent / MCP client (no second LLM). No WhatsApp.
 
 ---
 
 ## A. Official Track 01 bar (must pass)
+
+### A0. Shopper identity + budget-before-shop
+
+| | |
+| --- | --- |
+| **Claim** | Unique username + `shopper_token`; `set_budget` required before cart/checkout; MCP uses the same gate. |
+| **Code** | `src/lib/shoppers.ts` · `src/app/api/shoppers/route.ts` · `src/lib/mcp/handlers.ts` · `ShopperGate.tsx` |
+| **Verify** | Register on `/shop`. MCP `add_to_cart` without `set_budget` → `BUDGET_REQUIRED`. Login restores cart. |
+| **Pass if** | Unauthenticated / no-budget cart fails closed. |
 
 ### A1. Merchant transactable by an AI buyer end to end
 
