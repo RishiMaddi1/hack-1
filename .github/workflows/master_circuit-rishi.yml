@@ -27,32 +27,30 @@ jobs:
           node-version: "22.x"
           cache: npm
 
-      - name: Install and build
+      - name: Install, build, and zip slim standalone
         run: |
           set -euo pipefail
           npm ci
           npm run build
           grep -q "Gaming-desk shop" .next/server/app/index.html
-
-      - name: Assemble release zip
-        run: |
-          set -euo pipefail
           rm -rf release site.zip
-          mkdir -p release
-          # Standalone server + slim node_modules; full .next from CI build (not partial standalone copy).
-          cp -a .next/standalone/. release/
-          rm -rf release/.next
-          cp -a .next release/.next
+          # Slim Next standalone only — do NOT copy full .next (cache makes a 500MB+ zip).
+          cp -a .next/standalone release
+          cp -a .next/static release/.next/static
           cp -a public release/public
           cp start.js release/start.js
           cp .deployment release/.deployment
+          # Drop traced junk that Turbopack sometimes copies into standalone.
+          rm -rf release/.next/cache release/src release/scripts release/deploy release/data
           test -f release/server.js
+          test -f release/start.js
           test -f release/.next/BUILD_ID
           test -f release/.next/routes-manifest.json
-          test -f release/.next/server/app/index.html
+          test -d release/.next/static
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('release/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node start.js'; fs.writeFileSync('release/package.json', JSON.stringify(p,null,2));"
           (cd release && zip -ryq ../site.zip .)
-          unzip -l site.zip | grep -E '\.next/BUILD_ID|\.next/routes-manifest|server\.js'
+          echo "zip_bytes=$(wc -c < site.zip)"
+          unzip -l site.zip | grep -E '\.next/BUILD_ID|\.next/routes-manifest|\.next/static/|server\.js|start\.js'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -79,42 +77,10 @@ jobs:
           test -f check/.next/BUILD_ID
           test -f check/.next/routes-manifest.json
           test -f check/server.js
+          test -f check/start.js
+          test -d check/.next/static
 
-      - name: Deploy to Azure (attempt 1)
-        id: deploy1
-        continue-on-error: true
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: circuit-rishi
-          slot-name: Production
-          package: site.zip
-          clean: true
-          restart: true
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_933EB48F75FF44D780C0C1EE2DB36F6B }}
-
-      - name: Wait for Azure deploy lock (409)
-        if: steps.deploy1.outcome == 'failure'
-        run: sleep 120
-
-      - name: Deploy to Azure (attempt 2)
-        id: deploy2
-        if: steps.deploy1.outcome == 'failure'
-        continue-on-error: true
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: circuit-rishi
-          slot-name: Production
-          package: site.zip
-          clean: false
-          restart: true
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_933EB48F75FF44D780C0C1EE2DB36F6B }}
-
-      - name: Wait before final attempt
-        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
-        run: sleep 120
-
-      - name: Deploy to Azure (attempt 3)
-        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: circuit-rishi
