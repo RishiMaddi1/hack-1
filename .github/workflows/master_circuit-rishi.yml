@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: azure-circuit-rishi
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -35,12 +35,15 @@ jobs:
           cp -r .next/standalone/* deploy/
           cp -r .next/static deploy/.next/static
           cp -r public deploy/public
+          cp start.js deploy/start.js
           cp startup.sh deploy/startup.sh
           chmod +x deploy/startup.sh
-          # Azure Oryx ignores custom startup and runs `npm start` — make that
-          # call standalone server.js (next CLI is not in the slim bundle).
-          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('deploy/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node server.js'; fs.writeFileSync('deploy/package.json', JSON.stringify(p,null,2));"
+          # Prove CI built the buildathon homepage (not the old shop landing).
+          grep -q "Gaming-desk shop" deploy/.next/server/app/index.html
+          # Azure Oryx ignores custom startup and runs `npm start` — force bind via start.js.
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('deploy/package.json','utf8')); p.scripts=p.scripts||{}; p.scripts.start='node start.js'; fs.writeFileSync('deploy/package.json', JSON.stringify(p,null,2));"
           test -f deploy/server.js
+          test -f deploy/start.js
           grep -n '"start"' deploy/package.json
           ls -la deploy | head -40
 
