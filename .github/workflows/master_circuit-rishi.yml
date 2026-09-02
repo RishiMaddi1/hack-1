@@ -68,4 +68,6 @@ jobs:
           app-name: circuit-rishi
           slot-name: Production
           package: .
+          clean: true
+          restart: true
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_933EB48F75FF44D780C0C1EE2DB36F6B }}
