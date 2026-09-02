@@ -119,16 +119,32 @@ export async function quoteCheckout(sessionId: string): Promise<
 
   const checkoutId = id("chk");
   const receipt = checkoutId.slice(0, 40);
-  const order = await createRazorpayOrder({
-    amountPaise: priced.payablePaise,
-    receipt,
-    notes: {
-      checkoutId,
+  let order: { orderId: string; network: "razorpay_test" | "razorpay_mock" };
+  try {
+    order = await createRazorpayOrder({
+      amountPaise: priced.payablePaise,
+      receipt,
+      notes: {
+        checkoutId,
+        sessionId,
+        mandateId: mandate.id,
+        explanation: explanation.slice(0, 250),
+      },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[checkout] createRazorpayOrder failed", msg);
+    writeAudit({
       sessionId,
-      mandateId: mandate.id,
-      explanation: explanation.slice(0, 250),
-    },
-  });
+      type: "checkout.blocked",
+      explainable: true,
+      bounded: true,
+      gated: true,
+      reason: `Razorpay Order create failed: ${msg}`,
+      data: { payablePaise: priced.payablePaise },
+    });
+    return { status: 400, body: { error: `Razorpay Order failed: ${msg.slice(0, 160)}` } };
+  }
 
   const paymentLink = await createPaymentLink({
     amountPaise: priced.payablePaise,

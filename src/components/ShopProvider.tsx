@@ -396,52 +396,63 @@ export function ShopProvider({ children }: { children: ReactNode }) {
           pairSkus: m.crossSell?.map((p) => p.sku),
         }));
       setMessages((m) => [...m, { id: crypto.randomUUID(), role: "user", text: payload }]);
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: authHeaders(token),
-        body: JSON.stringify({ text: payload, history }),
-      });
-      const data = (await res.json()) as {
-        message?: ChatMessage;
-        error?: string;
-        messageText?: string;
-      };
-      if (!res.ok || !data.message) {
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: authHeaders(token),
+          body: JSON.stringify({ text: payload, history }),
+        });
+        const data = (await res.json()) as {
+          message?: ChatMessage;
+          error?: string;
+          messageText?: string;
+        };
+        if (!res.ok || !data.message) {
+          setMessages((m) => [
+            ...m,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              text: (typeof data.error === "string" ? data.error : null) || "Chat blocked — check budget.",
+            },
+          ]);
+          return;
+        }
+        setMessages((m) => [...m, data.message!]);
+        if (data.message.quote) {
+          setQuote(data.message.quote);
+          if (
+            data.message.quote.error === "mandate_exceeded" ||
+            data.message.quote.error === "mandate_expired" ||
+            data.message.quote.error === "mandate_bad_signature"
+          ) {
+            setNotice(
+              data.message.quote.error === "mandate_expired"
+                ? "Mandate expired — pick a spend cap in Cart to re-authorise."
+                : data.message.quote.error === "mandate_bad_signature"
+                  ? "Mandate signature failed — buyer authority did not sign this claim."
+                  : `Over your spend mandate — only ${formatInr(data.message.quote.mandate.remainingPaise)} left. Raise the cap in Cart, or pick a cheaper bag.`,
+            );
+          } else if (data.message.quote.error === "payment_required") {
+            setNotice(
+              `Agent quoted ${data.message.quote.accepts[0]?.orderId}. Confirm the card on Razorpay.`,
+            );
+            // Clear busy before opening Checkout so UI doesn't stay stuck on "Working the tools…"
+            setBusy(false);
+            await openRazorpayForQuote(data.message.quote);
+          }
+        }
+        await refresh(token);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Chat request failed.";
         setMessages((m) => [
           ...m,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            text: (typeof data.error === "string" ? data.error : null) || "Chat blocked — check budget.",
-          },
+          { id: crypto.randomUUID(), role: "assistant", text: detail },
         ]);
+        setNotice(detail);
+      } finally {
         setBusy(false);
-        return;
       }
-      setMessages((m) => [...m, data.message!]);
-      if (data.message.quote) {
-        setQuote(data.message.quote);
-        if (
-          data.message.quote.error === "mandate_exceeded" ||
-          data.message.quote.error === "mandate_expired" ||
-          data.message.quote.error === "mandate_bad_signature"
-        ) {
-          setNotice(
-            data.message.quote.error === "mandate_expired"
-              ? "Mandate expired — pick a spend cap in Cart to re-authorise."
-              : data.message.quote.error === "mandate_bad_signature"
-                ? "Mandate signature failed — buyer authority did not sign this claim."
-                : `Over your spend mandate — only ${formatInr(data.message.quote.mandate.remainingPaise)} left. Raise the cap in Cart, or pick a cheaper bag.`,
-          );
-        } else if (data.message.quote.error === "payment_required") {
-          setNotice(
-            `Agent quoted ${data.message.quote.accepts[0]?.orderId}. Confirm the card on Razorpay.`,
-          );
-          await openRazorpayForQuote(data.message.quote);
-        }
-      }
-      await refresh(token);
-      setBusy(false);
     },
     [token, text, messages, refresh, openRazorpayForQuote],
   );

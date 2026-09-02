@@ -19,6 +19,20 @@ function client() {
   });
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function createRazorpayOrder(opts: {
   amountPaise: number;
   receipt: string;
@@ -28,12 +42,16 @@ export async function createRazorpayOrder(opts: {
   if (!rzp) {
     return { orderId: `order_mock_${opts.receipt}`, network: "razorpay_mock" };
   }
-  const order = await rzp.orders.create({
-    amount: opts.amountPaise,
-    currency: "INR",
-    receipt: opts.receipt,
-    notes: opts.notes,
-  });
+  const order = await withTimeout(
+    rzp.orders.create({
+      amount: opts.amountPaise,
+      currency: "INR",
+      receipt: opts.receipt,
+      notes: opts.notes,
+    }),
+    20_000,
+    "Razorpay orders.create",
+  );
   return { orderId: String(order.id), network: "razorpay_test" };
 }
 
@@ -60,24 +78,28 @@ export async function createPaymentLink(opts: {
     };
   }
   try {
-    const link = await rzp.paymentLink.create({
-      amount: opts.amountPaise,
-      currency: "INR",
-      accept_partial: false,
-      description: opts.description.slice(0, 255),
-      customer: {
-        name: "Circuit shopper",
-        email: "shopper@circuit.test",
-        contact: "+919999999999",
-      },
-      notes: {
-        checkoutId: opts.checkoutId,
-        sessionId: opts.sessionId,
-        orderId: opts.orderId,
-      },
-      notify: { sms: false, email: false },
-      reminder_enable: false,
-    });
+    const link = await withTimeout(
+      rzp.paymentLink.create({
+        amount: opts.amountPaise,
+        currency: "INR",
+        accept_partial: false,
+        description: opts.description.slice(0, 255),
+        customer: {
+          name: "Circuit shopper",
+          email: "shopper@circuit.test",
+          contact: "+919999999999",
+        },
+        notes: {
+          checkoutId: opts.checkoutId,
+          sessionId: opts.sessionId,
+          orderId: opts.orderId,
+        },
+        notify: { sms: false, email: false },
+        reminder_enable: false,
+      }),
+      15_000,
+      "Razorpay paymentLink.create",
+    );
     const url = typeof link.short_url === "string" ? link.short_url : "";
     if (!url) {
       return {
