@@ -161,13 +161,35 @@ Update landing page demo copy if the URL differs from ngrok.
 
 ---
 
-## 10. Later — abandoned cart email (optional)
+## 10. Optional — abandoned cart email (Resend)
 
-After deploy works:
+Email is **never** required for MCP or shopping. Humans opt in at register or cart.
 
-1. Create **Azure Function** (Timer trigger, e.g. hourly)
-2. Function calls `POST https://<app>/api/cron/abandoned-cart` with header `Authorization: Bearer <CRON_SECRET>`
-3. Add Resend API key when that route exists
+### Same job, two callers
+
+| Caller | Endpoint | Auth |
+|--------|----------|------|
+| Merchant audit button (demo) | `POST /api/merchant/abandoned-cart` | none (rate-limited) |
+| **Azure cron (production)** | `POST /api/cron/abandoned-cart` | `Authorization: Bearer <CRON_SECRET>` |
+
+Both run `runAbandonedCartEmails`. **One email per cart** via `abandonedEmailSentAt` — cron can fire forever; duplicates are skipped.
+
+### Azure schedule (~every 30 seconds)
+
+1. App Settings: `RESEND_API_KEY`, `RESEND_FROM`, `CRON_SECRET`, `ABANDONED_CART_MIN_AGE_MS=0` (eligible on next tick)
+2. Timer (Logic App / Function / GitHub Actions) every **30s** →
+
+```http
+POST https://<app>/api/cron/abandoned-cart
+Authorization: Bearer <CRON_SECRET>
+Content-Type: application/json
+
+{}
+```
+
+3. Local test: Audit → **Left carts** → **Send reminders now** (same job, no Azure needed)
+
+Note: Azure Functions Consumption timers are often **1 minute** minimum. For a true 30s demo use Logic App recurrence or a small always-on worker; for the hackathon the merchant button is enough until you wire the timer.
 
 ---
 

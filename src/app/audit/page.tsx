@@ -51,6 +51,9 @@ function labelFor(type: string): { title: string; tone: "ok" | "warn" | "bad" | 
     "cart.add": { title: "Added to cart", tone: "neutral" },
     "cart.remove": { title: "Removed from cart", tone: "neutral" },
     "shopper.registered": { title: "Shopper registered", tone: "ok" },
+    "shopper.email_otp_sent": { title: "Email OTP sent", tone: "neutral" },
+    "shopper.email_verified": { title: "Email verified", tone: "ok" },
+    "shopper.abandoned_cart_email": { title: "Abandoned-cart email", tone: "ok" },
     "mandate.signed": { title: "Mandate signed", tone: "neutral" },
     "mandate.updated": { title: "Spend cap updated", tone: "neutral" },
   };
@@ -107,6 +110,8 @@ function AuditPageInner() {
   const [tab, setTab] = useState<Tab>("all");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [highlightEventId, setHighlightEventId] = useState<string | null>(null);
+  const [remindBusy, setRemindBusy] = useState(false);
+  const [remindMsg, setRemindMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab") as Tab | null;
@@ -261,7 +266,51 @@ function AuditPageInner() {
             />
           )}
           {tab === "abandoned" && (
-            <ul className="space-y-2">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3 border border-line bg-card px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-fg">Cart reminder emails</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    Same job Azure will cron every ~30s. One email per cart — already sent shoppers are
+                    skipped.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={remindBusy}
+                  onClick={() => {
+                    void (async () => {
+                      setRemindBusy(true);
+                      setRemindMsg(null);
+                      try {
+                        const res = await fetch("/api/merchant/abandoned-cart", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ minAgeMs: 0, force: true }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) {
+                          setRemindMsg(data.error || "Run failed");
+                          return;
+                        }
+                        setRemindMsg(
+                          `Scanned ${data.scanned} · sent ${data.sent} · skipped ${data.skipped}` +
+                            (data.errors?.length ? ` · errors ${data.errors.length}` : ""),
+                        );
+                      } catch (e) {
+                        setRemindMsg(e instanceof Error ? e.message : "Network error");
+                      } finally {
+                        setRemindBusy(false);
+                      }
+                    })();
+                  }}
+                  className="shrink-0 border border-fg bg-fg px-3 py-2 text-xs font-medium text-bg disabled:opacity-40"
+                >
+                  {remindBusy ? "Sending…" : "Send reminders now"}
+                </button>
+              </div>
+              {remindMsg ? <p className="text-xs text-muted">{remindMsg}</p> : null}
+              <ul className="space-y-2">
               {!merchant?.abandonedCarts.length ? (
                 <Empty text="No carts sitting unpaid." />
               ) : (
@@ -283,7 +332,8 @@ function AuditPageInner() {
                   </li>
                 ))
               )}
-            </ul>
+              </ul>
+            </div>
           )}
 
           {tab === "all" && (

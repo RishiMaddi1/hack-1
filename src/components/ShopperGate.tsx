@@ -61,6 +61,12 @@ export function ShopperGate({ onReady, resume, initialMode = "register" }: Props
   const [shownToken, setShownToken] = useState<string | null>(null);
   const [shownUsername, setShownUsername] = useState<string | null>(null);
   const [copied, setCopied] = useState<"both" | "user" | "token" | null>(null);
+  /** Optional cart-reminder email — never blocks mandate / MCP */
+  const [email, setEmail] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [emailPending, setEmailPending] = useState(false);
+  const [emailVerified, setEmailVerified] = useState<string | null>(null);
+  const [emailMsg, setEmailMsg] = useState<string | null>(null);
 
   async function copyText(kind: "both" | "user" | "token", text: string) {
     try {
@@ -131,6 +137,60 @@ export function ShopperGate({ onReady, resume, initialMode = "register" }: Props
     }
   }
 
+  async function requestEmailOtp() {
+    if (!pending?.shopperToken || !email.trim()) return;
+    setBusy(true);
+    setError(null);
+    setEmailMsg(null);
+    try {
+      const res = await fetch("/api/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopper-Token": pending.shopperToken,
+        },
+        body: JSON.stringify({ action: "request_otp", email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.message || data.error || "Could not send code");
+        return;
+      }
+      setEmailPending(true);
+      setEmailMsg(data.message || "Code sent — check your inbox.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyEmailOtp() {
+    if (!pending?.shopperToken || otpCode.length !== 6) return;
+    setBusy(true);
+    setError(null);
+    setEmailMsg(null);
+    try {
+      const res = await fetch("/api/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopper-Token": pending.shopperToken,
+        },
+        body: JSON.stringify({ action: "verify_otp", code: otpCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.message || data.error || "Verify failed");
+        return;
+      }
+      setEmailVerified(data.email);
+      setEmailPending(false);
+      setEmailMsg("Email verified — we’ll nudge you if you leave a cart.");
+      setOtpCode("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function finishBudget() {
     if (!pending) return;
     const maxRupees = Number(maxRupeesInput);
@@ -162,12 +222,12 @@ export function ShopperGate({ onReady, resume, initialMode = "register" }: Props
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-stone-900/55 p-4 backdrop-blur-[2px]">
-      <div className="w-full max-w-md border border-line bg-card p-6 text-fg shadow-none">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto border border-line bg-card p-6 text-fg shadow-none">
         <p className="font-[family-name:var(--font-serif)] text-2xl tracking-tight text-fg">Circuit</p>
         <p className="mt-2 text-sm leading-relaxed text-muted">
           {step === "identity"
             ? "Register a unique username before shopping. AI agents use the same identity on MCP."
-            : "Set your spend budget before the cart unlocks."}
+            : "Set your spend budget before the cart unlocks. Email for cart reminders is optional — skip anytime."}
         </p>
 
         {step === "identity" ? (
@@ -271,6 +331,68 @@ export function ShopperGate({ onReady, resume, initialMode = "register" }: Props
                 </div>
               </div>
             ) : null}
+
+            <div className="border border-line p-3">
+              <p className="text-xs font-medium text-fg">Email for cart reminders (optional)</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                Verify to get a receipt-style nudge with cheaper swaps if you abandon a cart. Agents never need this.
+              </p>
+              {emailVerified ? (
+                <p className="mt-2 text-sm text-muted">
+                  On for <span className="text-fg">{emailVerified}</span>
+                </p>
+              ) : !emailPending ? (
+                <div className="mt-2 flex gap-2">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@email.com"
+                    className="min-w-0 flex-1 border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+                    autoComplete="email"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !email.trim() || !pending}
+                    onClick={() => void requestEmailOtp()}
+                    className="shrink-0 border border-fg px-3 py-2 text-xs disabled:opacity-40"
+                  >
+                    Send code
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  <p className="text-[11px] text-muted">Code sent to {email}</p>
+                  <div className="flex gap-2">
+                    <input
+                      inputMode="numeric"
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="6-digit code"
+                      className="min-w-0 flex-1 border border-line bg-bg px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      disabled={busy || otpCode.length !== 6}
+                      onClick={() => void verifyEmailOtp()}
+                      className="shrink-0 border border-fg px-3 py-2 text-xs disabled:opacity-40"
+                    >
+                      Verify
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted underline"
+                    disabled={busy}
+                    onClick={() => void requestEmailOtp()}
+                  >
+                    Resend code
+                  </button>
+                </div>
+              )}
+              {emailMsg ? <p className="mt-2 text-[11px] text-muted">{emailMsg}</p> : null}
+            </div>
+
             <label className="block text-xs font-medium text-muted">
               Max budget (₹)
               <input
@@ -292,7 +414,7 @@ export function ShopperGate({ onReady, resume, initialMode = "register" }: Props
               onClick={() => void finishBudget()}
               className="w-full bg-fg px-3 py-2.5 text-sm font-medium text-bg disabled:opacity-40"
             >
-              {busy ? "…" : "Sign spend mandate"}
+              {busy ? "…" : emailVerified ? "Sign spend mandate" : "Skip email · sign spend mandate"}
             </button>
           </div>
         )}

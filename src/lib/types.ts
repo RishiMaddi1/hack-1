@@ -51,6 +51,12 @@ export type Shopper = {
   tokenHash: string;
   sessionId: string;
   createdAt: string;
+  /** Optional notify channel — never required for MCP / cart. */
+  email?: string;
+  emailVerified?: boolean;
+  emailOtpHash?: string;
+  emailOtpExpiresAt?: string;
+  abandonedEmailSentAt?: string;
 };
 
 export type MerchantRecord = {

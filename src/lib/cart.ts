@@ -39,6 +39,7 @@ export function mutateCart(
     }
   }
 
+  session.cartTouchedAt = new Date().toISOString();
   saveDb();
   writeAudit({
     sessionId,

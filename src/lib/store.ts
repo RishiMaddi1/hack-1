@@ -29,6 +29,8 @@ export type SessionState = {
   merchantId?: string;
   /** True only after set_budget / mandate sign with spendable cap */
   budgetSet?: boolean;
+  /** Last cart mutation — for abandoned-cart cron */
+  cartTouchedAt?: string;
   /** Last cards shown in buyer agent — for “add the 2nd keyboard / the mouse”. */
   lastSuggest?: {
     products: SessionSuggestItem[];

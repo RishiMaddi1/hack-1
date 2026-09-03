@@ -42,6 +42,7 @@ declare global {
 type ShopContext = {
   sid: string;
   username: string | null;
+  shopperToken: string;
   /** True while restoring session from storage on /shop */
   authLoading: boolean;
   isSignedIn: boolean;
@@ -556,6 +557,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     () => ({
       sid,
       username: auth?.username ?? null,
+      shopperToken: token,
       authLoading,
       isSignedIn,
       priced,
@@ -585,6 +587,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     [
       sid,
       auth?.username,
+      token,
       authLoading,
       isSignedIn,
       priced,

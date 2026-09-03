@@ -86,6 +86,8 @@ export async function POST(request: Request) {
       sessionId: auth.session.id,
       merchantId: auth.session.merchantId,
       budgetSet: Boolean(auth.session.budgetSet),
+      email: auth.shopper.emailVerified ? auth.shopper.email || null : null,
+      emailVerified: Boolean(auth.shopper.emailVerified),
     });
   }
 

@@ -4,6 +4,7 @@ import { useRef, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { ProductCard } from "@/components/ProductCard";
 import { ChatText } from "@/components/ChatText";
+import { EmailReminders } from "@/components/EmailReminders";
 import { useShop } from "@/components/ShopProvider";
 import { formatInr } from "@/lib/money";
 import { getProduct } from "@/lib/catalog";
@@ -215,6 +216,8 @@ export function CartDrawer() {
     setCap,
     notice,
     send,
+    shopperToken,
+    isSignedIn,
   } = useShop();
   if (pathname.startsWith("/pay")) return null;
   if (!cartOpen) return null;
@@ -310,6 +313,7 @@ export function CartDrawer() {
           >
             Pay this cart
           </button>
+          {isSignedIn && shopperToken ? <EmailReminders shopperToken={shopperToken} /> : null}
           {notice ? <p className="mt-3 text-xs leading-relaxed text-accent">{notice}</p> : null}
         </div>
       </aside>
