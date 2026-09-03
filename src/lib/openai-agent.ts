@@ -165,6 +165,7 @@ async function runTool(sessionId: string, name: string, args: Record<string, unk
     }
     mutateCart(sessionId, "add", sku, Number(args.qty) || 1);
     hintSku(acc, sku);
+    acc.showCart = true;
     acc.products = [toCard(product)];
     acc.upsell = pickCartUpsell(sessionId);
     const priced = priceCart(getCart(sessionId));

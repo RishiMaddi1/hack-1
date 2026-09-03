@@ -174,6 +174,8 @@ export type ChatMessage = {
     discountPaise?: number;
   };
   offerNote?: string;
+  /** Optional next-message chips; UI also derives these when omitted. */
+  suggestions?: string[];
 };
 
 export type GrowthRow = {

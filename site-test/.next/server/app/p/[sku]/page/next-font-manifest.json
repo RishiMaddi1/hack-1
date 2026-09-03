@@ -1,0 +1,12 @@
+{
+  "pages": {},
+  "app": {
+    "[project]/src/app/p/[sku]/page": [
+      "static/media/03fc1b4a8d284b5e-s.p.0wiir8udbzjvx.woff2",
+      "static/media/68d403cf9f2c68c5-s.p.20at88_q9f_kt.woff2",
+      "static/media/797e433ab948586e-s.p.0r6juujl39pe6.woff2"
+    ]
+  },
+  "appUsingSizeAdjust": true,
+  "pagesUsingSizeAdjust": false
+}

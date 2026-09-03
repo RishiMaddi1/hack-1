@@ -20,6 +20,11 @@ const HELLO_MESSAGE: ChatMessage = {
   id: "hello",
   role: "assistant",
   text: "Tell me what you need from the catalog and I’ll search and add. Ask what’s in the bag or about offers anytime. Type pay when you’re ready to quote Razorpay.",
+  suggestions: [
+    "show me something under 2000",
+    "what offers are live?",
+    "show me a cheap mouse",
+  ],
 };
 
 export type Priced = {
@@ -114,6 +119,12 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     setCartOpen(false);
   }, [onPayPage]);
 
+  // Chat is a shop tool — don't leave it open over audit/lab/home.
+  useEffect(() => {
+    if (needsShopperGate) return;
+    setAskOpen(false);
+  }, [needsShopperGate]);
+
   const token = auth?.shopperToken || "";
 
   const refresh = useCallback(async (tok: string) => {
@@ -167,7 +178,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         });
         setSid(data.sessionId);
         setGateDone(true);
-        setAskOpen(true);
+        // Don't auto-open buyer chat on refresh — only when user opens it (or after fresh login on /shop).
         await refresh(stored.token);
       })
       .catch(() => setGateDone(false))
@@ -181,7 +192,8 @@ export function ShopProvider({ children }: { children: ReactNode }) {
       setSid(next.sessionId);
       setGateDone(true);
       setGateOpen(false);
-      setAskOpen(true);
+      // Fresh login/budget: open chat only on the shop, not audit/lab/home.
+      if (needsShopperGate) setAskOpen(true);
       void refresh(next.shopperToken);
       setMessages((m) => [
         ...m,
@@ -192,7 +204,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
         },
       ]);
     },
-    [refresh],
+    [refresh, needsShopperGate],
   );
 
   const openLogin = useCallback(() => {
@@ -234,6 +246,8 @@ export function ShopProvider({ children }: { children: ReactNode }) {
             id: crypto.randomUUID(),
             role: "assistant",
             text: `Added ${product.name}. Say pay when you’re ready.`,
+            showCart: true,
+            suggestions: ["pay", "what's in my bag", "show me an upgrade"],
           },
         ]);
         setAskOpen(true);

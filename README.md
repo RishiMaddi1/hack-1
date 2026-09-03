@@ -4,7 +4,9 @@ Razorpay AI Buildathon · Track 01 · AI Growth & Agentic Commerce
 
 **Mandate-gated agentic checkout** + **MCP rail** so any AI shopper can transact. Shoppers **register a unique username**, **set a budget**, then shop. The server prices the cart, verifies an Ed25519 spend mandate, and creates a Razorpay Order (HTTP 402) + Payment Link. Human confirms. Hash-chained `/audit`.
 
-Thesis: Razorpay website builder ships this MCP shape → every merchant becomes AI-transactable. Circuit is the reference shop. Not WhatsApp. Not “works on every website without adopting the shape.”
+**Security (quiet, not a sticker row):** fail-closed on the money path — Ed25519 mandate, catalog prices only, Razorpay keys/HMAC server-side, 403 over cap, capture-once, hash-chained audit. Circuit ships the live shop, MCP discovery, upsell/campaigns, and abandoned-cart rail in one clean product. See `/lab` → *What's gated*.
+
+Thesis: Razorpay website builder ships this MCP shape → every merchant becomes AI-transactable. Circuit is the reference shop. Not WhatsApp. Not "works on every website without adopting the shape."
 
 ## Run
 

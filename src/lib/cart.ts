@@ -51,7 +51,7 @@ export function mutateCart(
       action === "clear"
         ? "Cart cleared."
         : `${action} ${product?.name ?? sku} ×${qty}.`,
-    data: { sku, qty, cart: session.cart },
+    data: { sku, qty, cart: session.cart.map((l) => ({ ...l })) },
   });
   return session.cart;
 }

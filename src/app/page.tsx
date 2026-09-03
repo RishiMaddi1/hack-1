@@ -343,6 +343,45 @@ export default function Home() {
             ))}
           </ol>
 
+          <div className="mt-6 flex flex-wrap items-start gap-5">
+            <div className="flex flex-wrap items-start gap-3">
+              <figure className="w-[9.5rem] shrink-0 border border-line bg-card sm:w-[11rem]">
+                <a href="/agentmcpbuy1.png" target="_blank" rel="noopener" className="block">
+                  <Image
+                    src="/agentmcpbuy1.png"
+                    alt="MCP agent cart — Hive65 keyboard under mandate"
+                    width={440}
+                    height={520}
+                    className="h-auto w-full transition-opacity hover:opacity-80"
+                    sizes="176px"
+                  />
+                </a>
+                <figcaption className="border-t border-line px-2 py-1.5 text-[10px] leading-snug text-muted">
+                  Agent bag · Hive65 · TKL 10% ↗
+                </figcaption>
+              </figure>
+              <figure className="w-[11rem] shrink-0 border border-line bg-card sm:w-[13rem]">
+                <a href="/agentmcpbuy2.png" target="_blank" rel="noopener" className="block">
+                  <Image
+                    src="/agentmcpbuy2.png"
+                    alt="MCP quote_checkout returns HTTP 402 and payment link — agent never enters card data"
+                    width={640}
+                    height={360}
+                    className="h-auto w-full transition-opacity hover:opacity-80"
+                    sizes="208px"
+                  />
+                </a>
+                <figcaption className="border-t border-line px-2 py-1.5 text-[10px] leading-snug text-muted">
+                  402 + pay link · human confirms ↗
+                </figcaption>
+              </figure>
+            </div>
+            <p className="max-w-[16rem] self-center text-sm font-medium leading-relaxed text-fg">
+              Even in MCP mode the agent can surface product images and cart details — so shoppers
+              see what they&apos;re buying before the pay link lands.
+            </p>
+          </div>
+
           <p className="mt-6 max-w-3xl text-sm leading-relaxed text-muted">
             After <span className="font-mono text-fg">quote_checkout</span>, the agent gets an HTTP
             402 with a Razorpay Order + Payment Link. The human confirms the card; mandate and audit

@@ -8,6 +8,37 @@ import type { AuditEvent, GrowthRow } from "@/lib/types";
 
 type Tab = "adds" | "paid" | "failed" | "open" | "abandoned" | "all";
 
+type SessionSnapshot = {
+  sessionId: string;
+  shopperId?: string;
+  cartTouchedAt?: string;
+  acceptedUpsell?: boolean;
+  cart: Array<{ sku: string; qty: number; name: string }>;
+  mandate: {
+    id: string;
+    maxPaise: number;
+    remainingPaise: number;
+    expiresAt: string;
+  } | null;
+  checkouts: Array<{
+    id: string;
+    status: string;
+    amountPaise: number;
+    orderId?: string;
+    lines: Array<{ sku: string; name: string; qty: number }>;
+    at: string;
+    explanation?: string;
+  }>;
+  auditEventCount: number;
+  auditRotated: boolean;
+  leftCart?: boolean;
+  canEmail: boolean;
+  emailStatus: "no_shopper" | "no_email" | "ready" | "sent";
+  emailMasked: string | null;
+  username: string | null;
+  abandonedEmailSentAt: string | null;
+};
+
 type Merchant = {
   cartAdds: Array<{ sku: string; name: string; count: number }>;
   paymentsPaid: Array<{
@@ -38,6 +69,11 @@ type Merchant = {
     shopperId?: string;
     lines: Array<{ sku: string; qty: number; name: string }>;
     lineCount: number;
+    canEmail: boolean;
+    emailStatus: "no_shopper" | "no_email" | "ready" | "sent";
+    emailMasked: string | null;
+    username: string | null;
+    abandonedEmailSentAt: string | null;
   }>;
 };
 
@@ -97,6 +133,7 @@ export default function AuditPage() {
 function AuditPageInner() {
   const searchParams = useSearchParams();
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [sessionSnapshots, setSessionSnapshots] = useState<Record<string, SessionSnapshot>>({});
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [chain, setChain] = useState<{ ok: boolean; checked: number; brokenAt?: string } | null>(null);
   const [growth, setGrowth] = useState<{
@@ -112,6 +149,8 @@ function AuditPageInner() {
   const [highlightEventId, setHighlightEventId] = useState<string | null>(null);
   const [remindBusy, setRemindBusy] = useState(false);
   const [remindMsg, setRemindMsg] = useState<string | null>(null);
+  const [sessionEmailBusy, setSessionEmailBusy] = useState(false);
+  const [sessionEmailMsg, setSessionEmailMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab") as Tab | null;
@@ -130,6 +169,7 @@ function AuditPageInner() {
       const res = await fetch("/api/audit");
       const data = await res.json();
       setEvents(data.events);
+      setSessionSnapshots(data.sessionSnapshots || {});
       setMerchant(data.merchant);
       setGrowth(data.growth);
       setChain(data.chain ?? null);
@@ -143,6 +183,46 @@ function AuditPageInner() {
     if (!sessionId) return [];
     return events.filter((e) => e.sessionId === sessionId);
   }, [events, sessionId]);
+
+  const activeSnapshot = sessionId ? sessionSnapshots[sessionId] : null;
+
+  async function refreshAudit() {
+    const res = await fetch("/api/audit");
+    const data = await res.json();
+    setEvents(data.events);
+    setSessionSnapshots(data.sessionSnapshots || {});
+    setMerchant(data.merchant);
+    setGrowth(data.growth);
+    setChain(data.chain ?? null);
+  }
+
+  async function sendSessionReminder(force = false) {
+    if (!sessionId) return;
+    setSessionEmailBusy(true);
+    setSessionEmailMsg(null);
+    try {
+      const res = await fetch("/api/merchant/abandoned-cart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, minAgeMs: 0, force }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setSessionEmailMsg(data.error || "Send failed");
+        return;
+      }
+      setSessionEmailMsg(`Sent to ${data.email}`);
+      await refreshAudit();
+    } catch (e) {
+      setSessionEmailMsg(e instanceof Error ? e.message : "Network error");
+    } finally {
+      setSessionEmailBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    setSessionEmailMsg(null);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!highlightEventId) return;
@@ -328,6 +408,15 @@ function AuditPageInner() {
                         {c.lineCount} item{c.lineCount === 1 ? "" : "s"} ·{" "}
                         {c.lines.map((l) => `${l.qty}× ${l.name}`).join(", ")}
                       </p>
+                      <p className="mt-1 text-[11px] text-muted">
+                        {c.emailStatus === "ready"
+                          ? `Email ready · ${c.emailMasked}`
+                          : c.emailStatus === "sent"
+                            ? `Reminder sent · ${c.emailMasked}`
+                            : c.emailStatus === "no_email"
+                              ? "No verified email"
+                              : "Guest / no shopper email"}
+                      </p>
                     </button>
                   </li>
                 ))
@@ -359,41 +448,146 @@ function AuditPageInner() {
                 Full event trail for one shopper session appears here — adds, quotes, captures,
                 blocks.
               </p>
-            ) : sessionEvents.length === 0 ? (
-              <p className="text-sm text-muted">No audit rows for this session yet.</p>
             ) : (
-              sessionEvents.map((e) => {
-                const { title, tone } = labelFor(e.type);
-                const hot = highlightEventId === e.id;
-                return (
-                  <article
-                    key={e.id}
-                    id={`audit-${e.id}`}
-                    className={`border p-3 transition-colors ${
-                      hot
-                        ? "border-fg bg-fg/5 ring-2 ring-fg/30"
-                        : tone === "bad"
-                          ? "border-danger/35"
-                          : tone === "warn"
-                            ? "border-accent/30"
-                            : "border-line"
-                    }`}
-                  >
-                    <div className="flex justify-between gap-2">
-                      <h3 className="font-[family-name:var(--font-serif)] text-base">{title}</h3>
-                      <time className="text-[11px] text-muted">
-                        {new Date(e.at).toLocaleString(undefined, {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                        })}
-                      </time>
-                    </div>
-                    <p className="mt-1 font-mono text-[10px] text-muted">{e.id}</p>
-                    <p className="mt-1 text-sm leading-relaxed text-muted">{softReason(e.reason)}</p>
-                  </article>
-                );
-              })
+              <>
+                {activeSnapshot ? (
+                  <div className="space-y-3 border border-line p-3">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                      Live session
+                    </p>
+                    {activeSnapshot.auditRotated ? (
+                      <p className="text-xs text-muted">
+                        Hash-chain ring rotated past this session&apos;s add/quote events — showing
+                        current cart and checkouts instead.
+                      </p>
+                    ) : null}
+                    {activeSnapshot.cart.length ? (
+                      <div>
+                        <p className="text-xs text-muted">Cart still open</p>
+                        <ul className="mt-1 space-y-1 text-sm">
+                          {activeSnapshot.cart.map((l) => (
+                            <li key={l.sku}>
+                              {l.qty}× {l.name}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted">Cart empty.</p>
+                    )}
+                    {activeSnapshot.leftCart ? (
+                      <div className="space-y-2 border-t border-line pt-3">
+                        <p className="text-xs text-muted">
+                          {activeSnapshot.emailStatus === "ready"
+                            ? `Verified email on file · ${activeSnapshot.emailMasked}`
+                            : activeSnapshot.emailStatus === "sent"
+                              ? `Already reminded · ${activeSnapshot.emailMasked}`
+                              : activeSnapshot.emailStatus === "no_email"
+                                ? "Shopper never verified email — can’t send yet."
+                                : "No shopper email on this session (guest / MCP)."}
+                        </p>
+                        {activeSnapshot.canEmail ? (
+                          <button
+                            type="button"
+                            disabled={sessionEmailBusy}
+                            onClick={() =>
+                              void sendSessionReminder(activeSnapshot.emailStatus === "sent")
+                            }
+                            className="w-full border border-fg bg-fg px-3 py-2 text-xs font-medium text-bg disabled:opacity-40"
+                          >
+                            {sessionEmailBusy
+                              ? "Sending…"
+                              : activeSnapshot.emailStatus === "sent"
+                                ? "Send email again"
+                                : "Send reminder email"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            className="w-full border border-line px-3 py-2 text-xs text-muted"
+                          >
+                            Send reminder email
+                          </button>
+                        )}
+                        {sessionEmailMsg ? (
+                          <p className="text-xs text-muted">{sessionEmailMsg}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {activeSnapshot.mandate ? (
+                      <p className="text-xs text-muted">
+                        Mandate remaining {formatInr(activeSnapshot.mandate.remainingPaise)} /{" "}
+                        {formatInr(activeSnapshot.mandate.maxPaise)}
+                      </p>
+                    ) : null}
+                    {activeSnapshot.cartTouchedAt ? (
+                      <p className="text-[11px] text-muted">
+                        Last cart touch{" "}
+                        {new Date(activeSnapshot.cartTouchedAt).toLocaleString()}
+                      </p>
+                    ) : null}
+                    {activeSnapshot.checkouts.length ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted">Checkouts</p>
+                        {activeSnapshot.checkouts.map((c) => (
+                          <div key={c.id} className="border border-line px-3 py-2 text-sm">
+                            <div className="flex justify-between gap-2">
+                              <span className="capitalize">{c.status}</span>
+                              <span className="tabular-nums">{formatInr(c.amountPaise)}</span>
+                            </div>
+                            <p className="mt-0.5 font-mono text-[10px] text-muted">{c.id}</p>
+                            {c.explanation ? (
+                              <p className="mt-1 text-xs text-muted">{softReason(c.explanation)}</p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {sessionEvents.length === 0 ? (
+                  !activeSnapshot ? (
+                    <p className="text-sm text-muted">No audit rows for this session yet.</p>
+                  ) : activeSnapshot.auditRotated ? null : (
+                    <p className="text-sm text-muted">No hash-chain events in the current ring.</p>
+                  )
+                ) : (
+                  sessionEvents.map((e) => {
+                    const { title, tone } = labelFor(e.type);
+                    const hot = highlightEventId === e.id;
+                    return (
+                      <article
+                        key={e.id}
+                        id={`audit-${e.id}`}
+                        className={`border p-3 transition-colors ${
+                          hot
+                            ? "border-fg bg-fg/5 ring-2 ring-fg/30"
+                            : tone === "bad"
+                              ? "border-danger/35"
+                              : tone === "warn"
+                                ? "border-accent/30"
+                                : "border-line"
+                        }`}
+                      >
+                        <div className="flex justify-between gap-2">
+                          <h3 className="font-[family-name:var(--font-serif)] text-base">{title}</h3>
+                          <time className="text-[11px] text-muted">
+                            {new Date(e.at).toLocaleString(undefined, {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })}
+                          </time>
+                        </div>
+                        <p className="mt-1 font-mono text-[10px] text-muted">{e.id}</p>
+                        <p className="mt-1 text-sm leading-relaxed text-muted">{softReason(e.reason)}</p>
+                      </article>
+                    );
+                  })
+                )}
+              </>
             )}
           </div>
         </section>

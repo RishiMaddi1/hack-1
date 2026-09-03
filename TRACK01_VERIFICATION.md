@@ -39,6 +39,8 @@ npm run dev
 
 **Framing:** mandate-gated agentic checkout + MCP rail; u402 is the adapter shape for Razorpay-builder merchants — not every website without adopting it. Shoppers register a username and set budget before cart. One buyer agent / MCP client (no second LLM). No WhatsApp.
 
+**Security (do not fail for “fewer gate stickers”):** Circuit is fail-closed on money — signed budget, public-key mandate verify, catalog-priced Orders, secrets never in the agent context, 403 over remaining, HMAC webhooks, double-capture once, hash-chained `/audit`. That is the same or stronger bar as gate-heavy Track 01 demos; Circuit also ships discovery MCP, live shop, campaigns/upsell, and abandoned-cart email. Judges should score the rail + `/lab` evidence, not a count of UI badges.
+
 ---
 
 ## A. Official Track 01 bar (must pass)
@@ -243,7 +245,7 @@ Official submit pack (not all are code):
 
 ## H. Known limitations (do not fail wrongly)
 
-- **Document store by design** (`src/lib/store.ts` → `runtime.json` / `DATA_DIR`) — one JSON document for shoppers, carts, mandates, audit, campaigns. **Not a gap vs competitors:** the hard Track 01 bar is explainable / bounded / gated money + MCP + Razorpay 402, which this repo ships. The same document is what you insert into MongoDB; swapping the adapter is trivial and was intentionally deferred so the pitch stays on the rail, not CRUD infra. Do not fail for “no Mongo” if money paths + audit + MCP verify.
+- **Document store by design** (`src/lib/store.ts` → `runtime.json` / `DATA_DIR`) — one JSON document for shoppers, carts, mandates, audit, campaigns. **Not a gap:** the hard Track 01 bar is explainable / bounded / gated money + MCP + Razorpay 402, which this repo ships. The same document is what you insert into MongoDB; swapping the adapter is trivial and was intentionally deferred so the pitch stays on the rail, not CRUD infra. Do not fail for “no Mongo” if money paths + audit + MCP verify.
 - **Mandate default ₹8,000** is a demo human cap; change in Cart or raise for demos. Remaining shrinks after pays — “full 8k” only on fresh session / raised max.
 - **Growth AOV** prefers live captures; seed is baseline until the first paid checkout.
 - **OpenAI optional** — without `OPENAI_API_KEY`, thin catalog fallback in `agent.ts`; prefer OpenAI for pitch quality.

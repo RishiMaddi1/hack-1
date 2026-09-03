@@ -1,0 +1,3 @@
+module.exports=[89104,e=>{"use strict";let t=new Map;e.s(["clientKey",0,function(e,t){let r=e.headers.get("x-forwarded-for")?.split(",")[0]?.trim()||e.headers.get("x-real-ip")||"local";return t?`${r}:${t}`:r},"rateLimit",0,function(e,r,i){let s=Date.now(),o=t.get(e);return(o||(o={hits:[]},t.set(e,o)),o.hits=o.hits.filter(e=>s-e<i),o.hits.length>=r)?{ok:!1,retryAfterSec:Math.max(1,Math.ceil((o.hits[0]+i-s)/1e3))}:(o.hits.push(s),{ok:!0})},"rateLimitResponse",0,function(e){return{error:"Too many requests. Slow down.",retryAfterSec:e}}])}];
+
+//# sourceMappingURL=src_lib_rate-limit_ts_09dzyft._.js.map

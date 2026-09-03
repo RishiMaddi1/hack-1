@@ -8,7 +8,7 @@
 
 1:40 MCP. Claude Desktop / any agent: same tools, same Gate. `quote_checkout` returns Payment Link for the human. Discovery at `/.well-known/agent-commerce.json`.
 
-2:20 Inspector. Ed25519 sign vs verify. Hash-chained audit. Underpay lab still quotes real cart. Double capture debits once.
+2:20 Inspector. Ed25519 sign vs verify. Hash-chained audit. Underpay lab still quotes real cart. Double capture debits once. We don’t sticker-count “gates” — the rail is fail-closed (keys never leave the server, agent can’t invent Order amounts). Same bar as loud security demos; plus live shop + MCP discovery.
 
 2:50 Gate. Over mandate → 403 + negotiate. No Order.
 

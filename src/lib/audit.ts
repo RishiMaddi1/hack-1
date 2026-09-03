@@ -28,6 +28,8 @@ export function writeAudit(
   const prevHash = tip?.hash || GENESIS;
   const rowBase: Omit<AuditEvent, "hash"> = {
     ...event,
+    // Snapshot data — never store live session/cart refs or later mutations break the hash.
+    data: JSON.parse(JSON.stringify(event.data ?? {})) as Record<string, unknown>,
     id: id("aud"),
     at: new Date().toISOString(),
     prevHash,
@@ -37,7 +39,8 @@ export function writeAudit(
     .digest("hex");
   const row: AuditEvent = { ...rowBase, hash };
   db.audit.unshift(row);
-  if (db.audit.length > 400) db.audit.length = 400;
+  // Keep a longer ring so merchant session drill-down still works for left carts.
+  if (db.audit.length > 2000) db.audit.length = 2000;
   saveDb();
   return row;
 }
@@ -52,14 +55,8 @@ export function verifyAuditChain(): { ok: boolean; checked: number; brokenAt?: s
   if (!rows.length) return { ok: true, checked: 0 };
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
-    const expectedPrev = i === rows.length - 1 ? GENESIS : rows[i + 1]?.hash || GENESIS;
-    // We store newest-first: row[i].prevHash should equal row[i+1].hash (older)
-    const olderHash = i + 1 < rows.length ? rows[i + 1]!.hash : GENESIS;
-    if (row.prevHash && olderHash && row.prevHash !== olderHash && row.prevHash !== expectedPrev) {
-      // Prefer: prevHash of newer === hash of next (older) in array
-    }
     if (row.hash) {
-      const body: Omit<AuditEvent, "hash"> = {
+      const body: Omit<AuditEvent, "hash" | "prevHash"> = {
         id: row.id,
         at: row.at,
         sessionId: row.sessionId,
@@ -69,7 +66,6 @@ export function verifyAuditChain(): { ok: boolean; checked: number; brokenAt?: s
         gated: row.gated,
         reason: row.reason,
         data: row.data,
-        prevHash: row.prevHash,
       };
       const prev = row.prevHash || GENESIS;
       const recomputed = createHash("sha256")
@@ -82,14 +78,40 @@ export function verifyAuditChain(): { ok: boolean; checked: number; brokenAt?: s
     if (i + 1 < rows.length) {
       const older = rows[i + 1]!;
       if (row.prevHash && older.hash && row.prevHash !== older.hash) {
-        // Legacy unhashed rows: skip link check if older has no hash
-        if (older.hash) {
-          return { ok: false, checked: i + 1, brokenAt: row.id };
-        }
+        return { ok: false, checked: i + 1, brokenAt: row.id };
       }
-    } else if (row.prevHash && row.prevHash !== GENESIS && row.hash) {
-      // Oldest with non-genesis prev is ok if migrated mid-chain
     }
   }
   return { ok: true, checked: rows.length };
+}
+
+/**
+ * Reseal newest←oldest hashes from current row bodies.
+ * Recovers from legacy bugs (e.g. live cart refs mutating audit.data after write).
+ */
+export function repairAuditChain(): { repaired: number } {
+  const db = getDb();
+  const rows = db.audit;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!;
+    const older = i === rows.length - 1 ? undefined : rows[i + 1];
+    const prevHash = older?.hash || GENESIS;
+    row.prevHash = prevHash;
+    const body: Omit<AuditEvent, "hash" | "prevHash"> = {
+      id: row.id,
+      at: row.at,
+      sessionId: row.sessionId,
+      type: row.type,
+      explainable: row.explainable,
+      bounded: row.bounded,
+      gated: row.gated,
+      reason: row.reason,
+      data: row.data,
+    };
+    row.hash = createHash("sha256")
+      .update(prevHash + canonicalBody(body))
+      .digest("hex");
+  }
+  saveDb();
+  return { repaired: rows.length };
 }

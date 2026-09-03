@@ -2,12 +2,13 @@
 
 import { useRef, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ProductCard } from "@/components/ProductCard";
+import { ChatProductRow } from "@/components/ChatProductRow";
 import { ChatText } from "@/components/ChatText";
 import { EmailReminders } from "@/components/EmailReminders";
 import { useShop } from "@/components/ShopProvider";
 import { formatInr } from "@/lib/money";
 import { getProduct } from "@/lib/catalog";
+import { suggestionsForMessage } from "@/lib/chat-suggestions";
 import type { ChatMessage, U402Quote } from "@/lib/types";
 
 function QuoteCard({
@@ -459,11 +460,10 @@ export function AskDrawer() {
                     <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
                       {m.showCart ? "In your bag" : "Matches"}
                     </p>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-2 gap-2">
                       {m.products.map((p) => (
-                        <ProductCard
+                        <ChatProductRow
                           key={p.sku}
-                          compact
                           product={p}
                           onAdd={(sku) => void addSku(sku, true)}
                         />
@@ -484,9 +484,8 @@ export function AskDrawer() {
                           : "Top of this lane — different category instead";
                       })()}
                     </p>
-                    <div className="max-w-xs">
-                      <ProductCard
-                        compact
+                    <div className="grid grid-cols-2 gap-2">
+                      <ChatProductRow
                         product={m.upsell}
                         badge={
                           getProduct(m.upsell.sku)?.category ===
@@ -504,11 +503,10 @@ export function AskDrawer() {
                     <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
                       Often bought together
                     </p>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-2 gap-2">
                       {m.crossSell.map((p) => (
-                        <ProductCard
+                        <ChatProductRow
                           key={p.sku}
-                          compact
                           product={p}
                           badge="Pair"
                           onAdd={(sku) => void addSku(sku, true)}
@@ -536,23 +534,50 @@ export function AskDrawer() {
           {notice ? <p className="text-xs leading-relaxed text-accent">{notice}</p> : null}
         </div>
 
-        <form
-          className="flex gap-2 border-t border-line p-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Ask, add, offers, or type pay"
-            className="flex-1 border border-line bg-card px-3 py-2 text-sm outline-none focus:border-fg"
-          />
-          <button type="submit" disabled={busy} className="bg-fg px-4 py-2 text-sm text-bg disabled:opacity-50">
-            Send
-          </button>
-        </form>
+        <div className="border-t border-line">
+          {(() => {
+            if (busy) return null;
+            const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+            const chips = lastAssistant
+              ? suggestionsForMessage(lastAssistant, {
+                  cartHasItems: Boolean(priced?.lines?.length),
+                })
+              : [];
+            if (!chips.length) return null;
+            return (
+              <div className="flex flex-wrap gap-2 px-4 pt-3">
+                {chips.map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void send(chip)}
+                    className="border border-line bg-bg px-2.5 py-1 text-left text-[11px] text-fg hover:border-fg disabled:opacity-50"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+          <form
+            className="flex gap-2 p-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send();
+            }}
+          >
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Ask, add, offers, or type pay"
+              className="flex-1 border border-line bg-card px-3 py-2 text-sm outline-none focus:border-fg"
+            />
+            <button type="submit" disabled={busy} className="bg-fg px-4 py-2 text-sm text-bg disabled:opacity-50">
+              Send
+            </button>
+          </form>
+        </div>
       </aside>
     </div>
   );

@@ -14,9 +14,41 @@ export function ProductCard({
   onAdd: (sku: string) => void;
   compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <article className="flex items-center gap-2.5 border border-line bg-card p-2 text-left">
+        <div className="relative h-14 w-14 shrink-0 overflow-hidden bg-bg">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={product.image}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="h-full w-full object-contain p-0.5"
+          />
+          {badge ? (
+            <span className="absolute left-0 top-0 bg-fg px-1 text-[8px] leading-4 text-bg">{badge}</span>
+          ) : null}
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="line-clamp-1 text-[12px] font-medium leading-tight">{product.name}</h3>
+          <p className="mt-0.5 text-[12px] tabular-nums text-muted">
+            {product.discountedPaise ? formatInr(product.discountedPaise) : formatInr(product.pricePaise)}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onAdd(product.sku)}
+          className="shrink-0 border border-fg px-2 py-1 text-[10px] hover:bg-fg hover:text-bg"
+        >
+          Add
+        </button>
+      </article>
+    );
+  }
+
   return (
     <article className="overflow-hidden border border-line bg-card text-left">
-      <div className={`relative overflow-hidden ${compact ? "aspect-[5/4]" : "aspect-square"}`}>
+      <div className="relative aspect-square overflow-hidden bg-bg">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={product.image}
@@ -35,7 +67,7 @@ export function ProductCard({
             {product.discountedPaise ? formatInr(product.discountedPaise) : formatInr(product.pricePaise)}
           </p>
         </div>
-        <p className={`line-clamp-2 text-xs text-muted ${compact ? "line-clamp-1" : ""}`}>{product.short}</p>
+        <p className="line-clamp-2 text-xs text-muted">{product.short}</p>
         <button
           type="button"
           onClick={() => onAdd(product.sku)}

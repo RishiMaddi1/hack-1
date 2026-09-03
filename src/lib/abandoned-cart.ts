@@ -347,6 +347,30 @@ export type AbandonedRunResult = {
   errors: Array<{ shopperId: string; error: string }>;
 };
 
+export type AbandonedSendOneResult =
+  | {
+      ok: true;
+      sessionId: string;
+      shopperId: string;
+      email: string;
+      dryRun?: boolean;
+    }
+  | {
+      ok: false;
+      sessionId: string;
+      error: string;
+      code:
+        | "no_session"
+        | "empty_cart"
+        | "already_paid"
+        | "no_shopper"
+        | "no_email"
+        | "already_sent"
+        | "too_young"
+        | "pay_link"
+        | "mail";
+    };
+
 /** Create a Circuit /pay/{orderId} link for the session's current cart. */
 async function payLinkForCurrentCart(
   sessionId: string,
@@ -371,6 +395,158 @@ async function payLinkForCurrentCart(
   }
 }
 
+function shopperForSession(sessionId: string): Shopper | undefined {
+  const db = getDb();
+  const session = db.sessions[sessionId];
+  if (session?.shopperId && db.shoppers[session.shopperId]) {
+    return db.shoppers[session.shopperId];
+  }
+  return Object.values(db.shoppers).find((s) => s.sessionId === sessionId);
+}
+
+/**
+ * Merchant demo: remind one left-cart session (must have verified email).
+ * `force` ignores abandonedEmailSentAt; `minAgeMs: 0` for instant demo.
+ */
+export async function sendAbandonedCartForSession(
+  sessionId: string,
+  opts?: { minAgeMs?: number; dryRun?: boolean; force?: boolean },
+): Promise<AbandonedSendOneResult> {
+  const minAgeMs = opts?.minAgeMs ?? 0;
+  const dryRun = Boolean(opts?.dryRun);
+  const force = Boolean(opts?.force);
+  const db = getDb();
+  const session = db.sessions[sessionId];
+  if (!session) {
+    return { ok: false, sessionId, error: "Session not found.", code: "no_session" };
+  }
+  if (!session.cart?.length) {
+    return { ok: false, sessionId, error: "Cart is empty.", code: "empty_cart" };
+  }
+  const paid = Object.values(db.checkouts).some(
+    (c) => c.sessionId === sessionId && c.status === "paid",
+  );
+  if (paid) {
+    return { ok: false, sessionId, error: "This session already paid.", code: "already_paid" };
+  }
+
+  const shopper = shopperForSession(sessionId);
+  if (!shopper) {
+    return {
+      ok: false,
+      sessionId,
+      error: "No shopper on this session — guest / MCP carts have no email.",
+      code: "no_shopper",
+    };
+  }
+  if (!shopper.emailVerified || !shopper.email) {
+    return {
+      ok: false,
+      sessionId,
+      error: "Shopper has not verified an email yet.",
+      code: "no_email",
+    };
+  }
+  if (!force && shopper.abandonedEmailSentAt) {
+    return {
+      ok: false,
+      sessionId,
+      error: "Reminder already sent — use force to resend in demo.",
+      code: "already_sent",
+    };
+  }
+
+  const touched = Date.parse(session.cartTouchedAt || shopper.createdAt);
+  const ageBase = Number.isFinite(touched) ? touched : Date.now();
+  if (Date.now() - ageBase < minAgeMs) {
+    return {
+      ok: false,
+      sessionId,
+      error: "Cart is newer than minAgeMs.",
+      code: "too_young",
+    };
+  }
+
+  const plan = buildCheaperPlan(session.cart);
+  const payable = priceCart(session.cart).payablePaise;
+  const subject = `Your Circuit bag — ${formatInr(payable)} waiting`;
+
+  let bill1Pay = "";
+  let bill2Pay = "";
+  if (!dryRun) {
+    const link1 = await payLinkForCurrentCart(session.id);
+    if (!link1.ok) {
+      return { ok: false, sessionId, error: `bill1_pay: ${link1.error}`, code: "pay_link" };
+    }
+    bill1Pay = link1.url;
+
+    if (plan) {
+      const savedCart = session.cart.map((l) => ({ ...l }));
+      session.cart = plan.cart.map((l) => ({ ...l }));
+      saveDb();
+      const link2 = await payLinkForCurrentCart(session.id);
+      session.cart = savedCart;
+      saveDb();
+      if (!link2.ok) {
+        return { ok: false, sessionId, error: `bill2_pay: ${link2.error}`, code: "pay_link" };
+      }
+      bill2Pay = link2.url;
+    }
+  } else {
+    bill1Pay = `${shopUrl()}/pay/dry_run_bill1`;
+    bill2Pay = `${shopUrl()}/pay/dry_run_bill2`;
+  }
+
+  const html = buildAbandonedCartEmailHtml({
+    username: shopper.username,
+    cart: session.cart,
+    plan,
+    payUrl: bill1Pay,
+    cheaperPayUrl: bill2Pay || bill1Pay,
+  });
+  const text = buildAbandonedCartEmailText({
+    username: shopper.username,
+    cart: session.cart,
+    plan,
+    payUrl: bill1Pay,
+    cheaperPayUrl: bill2Pay || bill1Pay,
+  });
+
+  if (dryRun) {
+    return { ok: true, sessionId, shopperId: shopper.id, email: shopper.email, dryRun: true };
+  }
+
+  const sent = await sendEmail({
+    to: shopper.email,
+    subject,
+    html,
+    text,
+  });
+
+  if (!sent.ok) {
+    return { ok: false, sessionId, error: sent.error, code: "mail" };
+  }
+
+  shopper.abandonedEmailSentAt = new Date().toISOString();
+  writeAudit({
+    sessionId: session.id,
+    type: "shopper.abandoned_cart_email",
+    explainable: true,
+    bounded: true,
+    gated: false,
+    reason: `Abandoned-cart reminder emailed to ${shopper.email}.`,
+    data: {
+      shopperId: shopper.id,
+      planKind: plan?.kind || "none",
+      bill1Pay,
+      bill2Pay: plan ? bill2Pay : null,
+      resendId: sent.id,
+    },
+  });
+  saveDb();
+  return { ok: true, sessionId, shopperId: shopper.id, email: shopper.email };
+}
+
 /**
  * Email verified shoppers with a non-empty cart that hasn't been paid,
  * older than minAgeMs (default 24h). MCP shoppers without email are ignored.
@@ -385,7 +561,6 @@ export async function runAbandonedCartEmails(opts?: {
   const dryRun = Boolean(opts?.dryRun);
   const force = Boolean(opts?.force);
   const db = getDb();
-  const now = Date.now();
   const result: AbandonedRunResult = { scanned: 0, sent: 0, skipped: 0, errors: [] };
 
   const shoppers = Object.values(db.shoppers).filter(
@@ -394,113 +569,15 @@ export async function runAbandonedCartEmails(opts?: {
 
   for (const shopper of shoppers) {
     result.scanned += 1;
-    const session = db.sessions[shopper.sessionId];
-    if (!session?.cart?.length) {
-      result.skipped += 1;
-      continue;
-    }
-    if (!force && shopper.abandonedEmailSentAt) {
-      result.skipped += 1;
-      continue;
-    }
-    const paid = Object.values(db.checkouts).some(
-      (c) => c.sessionId === session.id && c.status === "paid",
-    );
-    if (paid) {
-      result.skipped += 1;
-      continue;
-    }
-    const touched = Date.parse(session.cartTouchedAt || shopper.createdAt);
-    const ageBase = Number.isFinite(touched) ? touched : Date.now();
-    if (now - ageBase < minAgeMs) {
-      result.skipped += 1;
-      continue;
-    }
-
-    const plan = buildCheaperPlan(session.cart);
-    const payable = priceCart(session.cart).payablePaise;
-    const subject = `Your Circuit bag — ${formatInr(payable)} waiting`;
-
-    // Pay buttons must be Circuit /pay/{orderId} — never the shop homepage.
-    let bill1Pay = "";
-    let bill2Pay = "";
-    if (!dryRun) {
-      const link1 = await payLinkForCurrentCart(session.id);
-      if (!link1.ok) {
-        result.errors.push({ shopperId: shopper.id, error: `bill1_pay: ${link1.error}` });
-        continue;
-      }
-      bill1Pay = link1.url;
-
-      if (plan) {
-        const savedCart = session.cart.map((l) => ({ ...l }));
-        session.cart = plan.cart.map((l) => ({ ...l }));
-        saveDb();
-        const link2 = await payLinkForCurrentCart(session.id);
-        session.cart = savedCart;
-        saveDb();
-        if (!link2.ok) {
-          result.errors.push({ shopperId: shopper.id, error: `bill2_pay: ${link2.error}` });
-          continue;
-        }
-        bill2Pay = link2.url;
-      }
-    } else {
-      bill1Pay = `${shopUrl()}/pay/dry_run_bill1`;
-      bill2Pay = `${shopUrl()}/pay/dry_run_bill2`;
-    }
-
-    const html = buildAbandonedCartEmailHtml({
-      username: shopper.username,
-      cart: session.cart,
-      plan,
-      payUrl: bill1Pay,
-      cheaperPayUrl: bill2Pay || bill1Pay,
-    });
-    const text = buildAbandonedCartEmailText({
-      username: shopper.username,
-      cart: session.cart,
-      plan,
-      payUrl: bill1Pay,
-      cheaperPayUrl: bill2Pay || bill1Pay,
-    });
-
-    if (dryRun) {
+    const one = await sendAbandonedCartForSession(shopper.sessionId, { minAgeMs, dryRun, force });
+    if (one.ok) {
       result.sent += 1;
-      continue;
+    } else if (one.code === "mail" || one.code === "pay_link") {
+      result.errors.push({ shopperId: shopper.id, error: one.error });
+    } else {
+      result.skipped += 1;
     }
-
-    const sent = await sendEmail({
-      to: shopper.email,
-      subject,
-      html,
-      text,
-    });
-
-    if (!sent.ok) {
-      result.errors.push({ shopperId: shopper.id, error: sent.error });
-      continue;
-    }
-
-    shopper.abandonedEmailSentAt = new Date().toISOString();
-    writeAudit({
-      sessionId: session.id,
-      type: "shopper.abandoned_cart_email",
-      explainable: true,
-      bounded: true,
-      gated: false,
-      reason: `Abandoned-cart reminder emailed to ${shopper.email}.`,
-      data: {
-        shopperId: shopper.id,
-        planKind: plan?.kind || "none",
-        bill1Pay,
-        bill2Pay: plan ? bill2Pay : null,
-        resendId: sent.id,
-      },
-    });
-    result.sent += 1;
   }
 
-  if (!dryRun && result.sent) saveDb();
   return result;
 }

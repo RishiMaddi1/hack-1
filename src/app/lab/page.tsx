@@ -217,8 +217,8 @@ export default function LabPage() {
         Session: <span className="font-mono text-sm text-fg">{sessionId || "…"}</span>
       </p>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.25fr)]">
-        <div className="space-y-3">
+      <div className="mt-8 flex items-start gap-8" style={{ flexWrap: "nowrap" }}>
+        <div className="space-y-3" style={{ width: "40%", flexShrink: 0 }}>
           {ATTACKS.map((a) => (
             <button
               key={a.id}
@@ -238,7 +238,7 @@ export default function LabPage() {
           ))}
         </div>
 
-        <div className="flex min-h-[32rem] flex-col border border-line bg-[#1a1816] text-[#e8e2d9] dark:bg-[#0f0e0c]">
+        <div className="flex min-h-[32rem] flex-col border border-line bg-[#1a1816] text-[#e8e2d9] dark:bg-[#0f0e0c]" style={{ flex: 1, position: "sticky", top: "1.5rem" }}>
           <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
             <span className="size-2 rounded-full bg-white/25" />
             <span className="size-2 rounded-full bg-white/25" />
@@ -376,6 +376,59 @@ export default function LabPage() {
           ) : null}
         </div>
       </div>
+
+      <section className="mt-14 border-t border-line pt-10">
+        <h2 className="font-[family-name:var(--font-serif)] text-2xl">What&apos;s gated</h2>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted">
+          Same fail-closed path for shop chat and MCP — not a sticker count. The agent never holds
+          Razorpay keys or invents Order amounts; money moves only through these checks.
+        </p>
+        <ul className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[
+            {
+              title: "Budget before cart",
+              body: "Shopper sets a signed mandate. No budget → cart and checkout stay locked (UI + MCP).",
+            },
+            {
+              title: "Ed25519 mandate",
+              body: "Buyer authority signs remaining/max/expiry. Merchant verifies with the public key only — forged remaining fails closed.",
+            },
+            {
+              title: "Catalog prices win",
+              body: "Tools cannot pass amountPaise or unit prices. Server runs priceCart from stored SKUs.",
+            },
+            {
+              title: "Keys stay server-side",
+              body: "Razorpay key/secret and webhook HMAC never enter the LLM or MCP client context.",
+            },
+            {
+              title: "Over cap → 403",
+              body: "quote_checkout over remaining returns blocked + negotiate tips. No Razorpay Order.",
+            },
+            {
+              title: "Capture once",
+              body: "Webhook HMAC must match. Double capture / confirm on the same Order debits once; stop rule on decline.",
+            },
+            {
+              title: "Hash-chained audit",
+              body: "Every money action is explainable, bounded, and gated — linked SHA-256 trail on /audit.",
+            },
+            {
+              title: "One rail, two surfaces",
+              body: "Buyer agent chat and MCP tools hit the same cart, mandate, and checkout code paths.",
+            },
+            {
+              title: "Attacks above prove it",
+              body: "Each lab button is a live POST /api/lab — forge, replay, expire, underpay, bad HMAC, double capture.",
+            },
+          ].map((g) => (
+            <li key={g.title} className="border border-line bg-card px-4 py-4">
+              <p className="text-sm font-medium text-fg">{g.title}</p>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted">{g.body}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
     </main>
   );
 }

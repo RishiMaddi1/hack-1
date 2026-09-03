@@ -1,0 +1,3 @@
+{
+  "/api/buyer/mandate/sign/route": "app/api/buyer/mandate/sign/route.js"
+}
