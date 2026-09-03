@@ -6,7 +6,7 @@ import { DemoPaths } from "@/components/DemoPaths";
 export const metadata: Metadata = {
   title: "Circuit · u402 — Agentic commerce on Razorpay",
   description:
-    "Kreo desk shop agents can buy from under a signed spend cap, on Razorpay test mode. Track 01 reference merchant.",
+    "Mandate-gated agentic commerce for Razorpay merchants. Circuit is the reference shop — one Gate for UI and MCP.",
 };
 
 const heroLinks = [
@@ -151,12 +151,12 @@ export default function Home() {
             Circuit
           </h1>
           <p className="mt-3 font-[family-name:var(--font-serif)] text-xl leading-snug text-muted md:text-2xl">
-            Gaming-desk shop an AI can actually buy from — on Razorpay test mode.
+            Not another chat widget — a mandate Gate so AI shoppers can buy on Razorpay.
           </p>
           <p className="mt-4 max-w-lg text-sm leading-relaxed text-muted md:text-base">
-            Real Kreo catalog. Shopper signs a spend cap before the cart unlocks. Checkout returns a
-            Razorpay quote (HTTP 402) under that mandate. Website buyer agent and MCP tools share one
-            Gate — same prices, same budget, same audit.
+            Circuit is the reference merchant: Kreo catalog, signed spend cap before cart, HTTP 402
+            quote, human pays. Website buyer agent and MCP tools share one Gate — same prices, same
+            budget, same audit.
           </p>
 
           <ul className="mt-6 flex max-w-xl flex-col gap-2.5">
