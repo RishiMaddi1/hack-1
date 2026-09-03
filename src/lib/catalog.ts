@@ -692,12 +692,20 @@ export function searchCatalog(query: string, budgetPaise?: number): Product[] {
     for (const w of words) {
       if (hay.includes(w)) score += 2;
       if (p.name.toLowerCase().includes(w)) score += 2;
-      // Typo-tolerant: ordered letter overlap vs category / tags / name tokens
+      // Typo-tolerant only against short fields (category / tags / name words) — not long details
       if (w.length >= 5) {
-        const need = Math.ceil(w.length * 0.7);
-        if (orderedOverlap(p.category, w) >= need) score += 3;
-        for (const part of hay.split(/[^a-z0-9]+/)) {
-          if (part.length >= 4 && orderedOverlap(part, w) >= need) {
+        const need = Math.ceil(w.length * 0.75);
+        if (orderedOverlap(p.category, w) >= Math.min(need, p.category.length)) score += 4;
+        for (const tag of p.tags) {
+          if (tag.length >= 4 && orderedOverlap(tag, w) >= Math.min(need, tag.length)) {
+            score += 3;
+            break;
+          }
+        }
+        for (const part of p.name.toLowerCase().split(/\s+/)) {
+          if (part.length < 4) continue;
+          if (Math.abs(part.length - w.length) > 4) continue;
+          if (orderedOverlap(part, w) >= Math.min(need, part.length)) {
             score += 2;
             break;
           }
