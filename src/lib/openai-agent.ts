@@ -100,6 +100,8 @@ type ToolAcc = {
   quote?: U402Quote;
   hintedSkus: string[];
   offerNote?: string;
+  lastTool?: string;
+  lastRemovedName?: string;
 };
 
 function hintSku(acc: ToolAcc, sku: string) {
@@ -221,6 +223,8 @@ async function runTool(sessionId: string, name: string, args: Record<string, unk
 
     const removedName = getProduct(sku)?.name || sku;
     mutateCart(sessionId, "remove", sku);
+    acc.lastTool = "remove_from_cart";
+    acc.lastRemovedName = removedName;
     const priced = priceCart(getCart(sessionId));
     for (const l of priced.lines) hintSku(acc, l.sku);
     acc.products = priced.lines
@@ -420,41 +424,86 @@ If mandate expired, tell them to re-authorise a spend cap in Cart.`;
     content: `${formatSuggestContext(sessionId)}\n\n${bagBlock}\nMandate: max ${mandateMaxRef()} remaining ${mandateRemainingRef()} (tokens).\nBag payable hint: ${pricedNow.payablePaise ? cartPayableRef() : "empty"}.\n\nBuyer message: ${text}`,
   });
   const acc: ToolAcc = { products: [], hintedSkus: [] };
+  let toolsRan = false;
+
+  const replyFromTools = (fallbackText: string): ChatMessage => {
+    const { text: safeText } = finalizeAgentPrices(fallbackText, sessionId, acc.hintedSkus);
+    return {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      text: safeText,
+      products: acc.products.length ? acc.products : undefined,
+      showCart: acc.showCart || toolsRan,
+      upsell: acc.upsell,
+      crossSell: acc.crossSell?.length ? acc.crossSell : undefined,
+      quote: acc.quote,
+      offerNote: acc.offerNote,
+    };
+  };
 
   const model = process.env.OPENAI_MODEL || "gpt-4o";
   for (let i = 0; i < 6; i++) {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        tools: TOOLS,
-        tool_choice: "auto",
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.text();
+    let res: Response | null = null;
+    let lastErr = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          tools: TOOLS,
+          tool_choice: "auto",
+        }),
+      });
+      if (res.ok) break;
+      lastErr = await res.text();
+      const retryable = res.status === 429 || res.status >= 500;
+      if (!retryable || attempt === 2) break;
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+    }
+    if (!res || !res.ok) {
       writeAudit({
         sessionId,
         type: "agent.openai_error",
         explainable: true,
         bounded: true,
         gated: true,
-        reason: `OpenAI HTTP ${res.status}. Falling back to the rule agent.`,
-        data: { status: res.status, snippet: err.slice(0, 160) },
+        reason: `OpenAI HTTP ${res?.status || 0}.${toolsRan ? " Tools already ran — returning cart state." : " Falling back."}`,
+        data: { status: res?.status, snippet: lastErr.slice(0, 160), toolsRan },
       });
+      if (toolsRan) {
+        const priced = priceCart(getCart(sessionId));
+        const names = priced.lines.map((l) => l.name).join(", ") || "empty";
+        const fallback =
+          acc.lastTool === "remove_from_cart" && acc.lastRemovedName
+            ? `Removed ${acc.lastRemovedName}. Bag is ${names}.`
+            : `Updated your bag (${names}). Total ${cartPayableRef()}.`;
+        return replyFromTools(fallback);
+      }
       return null;
     }
     const data = (await res.json()) as {
       choices: Array<{ message: OaiMessage }>;
     };
     const msg = data.choices[0]?.message;
-    if (!msg) return null;
+    if (!msg) {
+      if (toolsRan) {
+        const priced = priceCart(getCart(sessionId));
+        const names = priced.lines.map((l) => l.name).join(", ") || "none";
+        const fallback =
+          acc.lastTool === "remove_from_cart" && acc.lastRemovedName
+            ? `Removed ${acc.lastRemovedName}. Bag is ${names}.`
+            : `Updated your bag. Total ${cartPayableRef()}. Lines: ${names}.`;
+        return replyFromTools(fallback);
+      }
+      return null;
+    }
     if (msg.tool_calls?.length) {
+      toolsRan = true;
       messages.push(msg);
       for (const call of msg.tool_calls) {
         let args: Record<string, unknown> = {};
