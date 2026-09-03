@@ -46,7 +46,7 @@ export function formatSuggestContext(sessionId: string): string {
     lines.push(`Pair ${i + 1}: sku=${p.sku} name=${p.name}`);
   });
   lines.push(
-    "Ordinals map to Match N above ONLY: “1st / first / the first one” = Match 1’s exact sku; “2nd / second” = Match 2. Do not renumber from your own sentence order. Add only what they asked for.",
+    "Match N is identity only (first/second refers to these rows). Do not add_to_cart unless buyer intent is clearly to put that item in the bag/cart. Do not renumber from your own sentence order.",
   );
   return lines.join("\n");
 }

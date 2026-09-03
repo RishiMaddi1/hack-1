@@ -39,7 +39,7 @@ const TOOLS = [
     function: {
       name: "add_to_cart",
       description:
-        "Add a known SKU to the cart ONLY when the buyer explicitly asked to add / put in bag / take / buy that item (or an ordinal like the 1st). Do NOT call this for browse-only messages like “cheap mice” or “show controllers” — use search_catalog instead. Price comes from catalog storage — you cannot set it.",
+        "Add a known SKU to the cart ONLY when buyer intent is clearly to put something in the bag/cart. If they are browsing, comparing, or asking for details/info about a Match / upgrade / product, do NOT call this — answer instead. Price comes from catalog storage — you cannot set it.",
       parameters: {
         type: "object",
         properties: { sku: { type: "string" }, qty: { type: "number" } },
@@ -381,8 +381,8 @@ Always mention a same-category step-up when the tool returns upgrade — use pri
 When they ask what's in the cart / bag / basket, call get_cart.
 When they ask to remove / drop / delete / take out an item (typos are fine), call get_cart if needed, then remove_from_cart with sku and/or query. Never call add_to_cart on a remove request. Vague “any one X” = one matching bag line.
 When they ask about deals / offers, call list_offers.
-When they browse / ask what exists (“cheap mice”, “show controllers”, “wireless under 5k”, typos ok): call search_catalog ONLY. Show Match cards. Do NOT call add_to_cart unless they clearly said add / put in bag / cart / take / buy this one / the 1st/2nd / the upgrade.
-When they explicitly want to add (including “add a cheap kayboard”, “the first one”, “the upgrade”, or a named SKU), use LAST SUGGESTIONS Match N + search_catalog, then add_to_cart with those exact SKUs, then get_cart. “First one” = Match 1 — never renumber from your reply text. Add only what they asked for — not every pair card.
+Judge intent from the whole message (any wording / typos). If they are browsing, comparing, or asking for details about a shown Match / upgrade / product — search_catalog and/or answer from LAST SUGGESTIONS; show cards; do NOT call add_to_cart.
+Call add_to_cart only when intent is clearly to put item(s) in the bag/cart. Then resolve SKUs via Match N / search_catalog, add_to_cart those exact SKUs only (not pair cards), then get_cart. “First/second/… one” names which Match — it is not itself an add unless they also meant to cart it.
 When they want to pay / checkout / settle / buy the cart, call quote_checkout with NO arguments. Never pass amount/price fields.
 After a 402, say you created the Razorpay Order for {{cart.payable}}.
 If quote_checkout returns "Cart is empty.", tell them to add items first (cards are suggestions until added).

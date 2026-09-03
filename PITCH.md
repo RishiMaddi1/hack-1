@@ -16,6 +16,6 @@
 
 3:40 Growth. `/audit` live AOV.
 
-4:00 Thesis. u402 MCP = what Razorpay website builder should ship so every merchant is AI-transactable. Circuit is the reference implementation — not WhatsApp glue.
+4:00 Thesis. u402 MCP = what Razorpay website builder should ship so every merchant is AI-transactable. Circuit is the reference implementation — not WhatsApp glue. Persistence is one JSON document on purpose (Mongo-ready later) so the demo proves the gate, not a database.
 
 4:40 Ask. Hire the intern who built the rail, not another chat widget.

@@ -25,6 +25,7 @@ x402 settles in USDC. ACP is Stripe-shaped. AP2 is card mandates. NPCI UAP is no
 8. **Audit** — hash-chained append-only log (`prevHash`/`hash`, `verifyAuditChain`).
 9. **Discovery** — `/.well-known/agent-commerce.json` documents register → budget → shop for any Razorpay-builder merchant shape.
 10. **Gate lab** — `/lab` adversarial demos (sessionId path; shopper UI uses tokens).
+11. **Document store** — `runtime.json` (or `DATA_DIR` on Azure) holds the whole merchant runtime as **one JSON document**. That is deliberate: the schema is already MongoDB-shaped (shoppers / carts / mandates / audit / campaigns). Wiring `saveDb` → `collection.replaceOne` is a afternoon, not a different architecture. Buildathon focus stayed on the rail competitors skip (signed budget, MCP, server-priced 402), not reinventing persistence.
 
 ```mermaid
 sequenceDiagram

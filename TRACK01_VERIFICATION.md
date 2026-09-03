@@ -6,7 +6,7 @@
 | --- | --- |
 | Product | **Circuit** (merchant shop) · protocol layer **u402** |
 | Track | Razorpay AI Buildathon · **01 — AI Growth & Agentic Commerce** |
-| Stack | Next.js 16 · TypeScript · Razorpay Node SDK (test mode) · optional OpenAI tools agent |
+| Stack | Next.js 16 · TypeScript · Razorpay Node SDK (test mode) · optional OpenAI tools agent · **document store** (`runtime.json` → Mongo-ready) |
 | Official bar (razorpay.com/buildathon) | Every money action **explainable, bounded and gated**. Show the **audit trail** and **one failure handled gracefully**. |
 | Build goal (official) | Agent that grows merchant revenue on Razorpay **test-mode** APIs, **or** makes a merchant **transactable by an AI buyer end to end**. |
 
@@ -243,11 +243,11 @@ Official submit pack (not all are code):
 
 ## H. Known limitations (do not fail wrongly)
 
+- **Document store by design** (`src/lib/store.ts` → `runtime.json` / `DATA_DIR`) — one JSON document for shoppers, carts, mandates, audit, campaigns. **Not a gap vs competitors:** the hard Track 01 bar is explainable / bounded / gated money + MCP + Razorpay 402, which this repo ships. The same document is what you insert into MongoDB; swapping the adapter is trivial and was intentionally deferred so the pitch stays on the rail, not CRUD infra. Do not fail for “no Mongo” if money paths + audit + MCP verify.
 - **Mandate default ₹8,000** is a demo human cap; change in Cart or raise for demos. Remaining shrinks after pays — “full 8k” only on fresh session / raised max.
 - **Growth AOV** prefers live captures; seed is baseline until the first paid checkout.
-- **OpenAI optional** — without `OPENAI_API_KEY`, rule-based `agent.ts` still drives tools-ish flows; prefer OpenAI for pitch quality.
+- **OpenAI optional** — without `OPENAI_API_KEY`, thin catalog fallback in `agent.ts`; prefer OpenAI for pitch quality.
 - **Dev hydration warnings** on tiles can appear; not a money-path defect.
-- **File-backed store** (`src/lib/store.ts`) — fine for demo; not multi-instance production durable DB.
 - **Webhook** needs public HTTPS URL; localhost alone will not receive Razorpay events.
 
 ---

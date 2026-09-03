@@ -61,4 +61,6 @@ Optional `MCP_SHARED_SECRET` → `Authorization: Bearer …` on `/api/mcp`.
 
 Next.js · TypeScript · Razorpay · Ed25519 · `@modelcontextprotocol/sdk` · hash-chained audit
 
+**Persistence (intentional):** runtime state is one JSON document (`data/runtime.json` via `src/lib/store.ts`) — shoppers, carts, mandates, audit, campaigns. Same document shape drops into MongoDB as one collection later; we did **not** spend the buildathon on ORM/DB ops because the hard parts are mandate + MCP + 402 + Razorpay, not swapping a file for a document DB.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md), [PITCH.md](PITCH.md), [TRACK01_VERIFICATION.md](TRACK01_VERIFICATION.md).

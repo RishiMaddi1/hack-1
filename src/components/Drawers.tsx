@@ -340,7 +340,6 @@ export function AskDrawer() {
     notice,
     priced,
   } = useShop();
-  if (pathname.startsWith("/pay")) return null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const replyStartRef = useRef<HTMLDivElement>(null);
   const prevLen = useRef(0);
@@ -370,6 +369,7 @@ export function AskDrawer() {
     }
   }
 
+  if (pathname.startsWith("/pay")) return null;
   if (!askOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-fg/30">
