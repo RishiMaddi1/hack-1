@@ -686,27 +686,33 @@ export function searchCatalog(query: string, budgetPaise?: number): Product[] {
     return ti;
   }
 
+  function editDistance(a: string, b: string): number {
+    if (Math.abs(a.length - b.length) > 3) return 99;
+    const dp = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+    for (let i = 0; i <= a.length; i++) dp[i]![0] = i;
+    for (let j = 0; j <= b.length; j++) dp[0]![j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        dp[i]![j] = Math.min(dp[i - 1]![j]! + 1, dp[i]![j - 1]! + 1, dp[i - 1]![j - 1]! + cost);
+      }
+    }
+    return dp[a.length]![b.length]!;
+  }
+
   const scored = PRODUCTS.map((p) => {
     const hay = `${p.name} ${p.short} ${p.details} ${p.category} ${p.tags.join(" ")}`.toLowerCase();
     let score = 0;
     for (const w of words) {
       if (hay.includes(w)) score += 2;
       if (p.name.toLowerCase().includes(w)) score += 2;
-      // Typo-tolerant only against short fields (category / tags / name words) — not long details
+      // Typo-tolerant: small edit distance vs category / tags / name words only
       if (w.length >= 5) {
-        const need = Math.ceil(w.length * 0.75);
-        if (orderedOverlap(p.category, w) >= Math.min(need, p.category.length)) score += 4;
-        for (const tag of p.tags) {
-          if (tag.length >= 4 && orderedOverlap(tag, w) >= Math.min(need, tag.length)) {
-            score += 3;
-            break;
-          }
-        }
-        for (const part of p.name.toLowerCase().split(/\s+/)) {
-          if (part.length < 4) continue;
-          if (Math.abs(part.length - w.length) > 4) continue;
-          if (orderedOverlap(part, w) >= Math.min(need, part.length)) {
-            score += 2;
+        const fields = [p.category, ...p.tags, ...p.name.toLowerCase().split(/\s+/)];
+        for (const field of fields) {
+          if (field.length < 4) continue;
+          if (editDistance(w, field) <= 2) {
+            score += field === p.category ? 5 : 3;
             break;
           }
         }
