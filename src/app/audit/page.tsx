@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { formatInr } from "@/lib/money";
 import type { AuditEvent, GrowthRow } from "@/lib/types";
 
@@ -77,6 +78,21 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 export default function AuditPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto max-w-[90rem] px-6 py-10">
+          <p className="text-muted">Loading audit…</p>
+        </main>
+      }
+    >
+      <AuditPageInner />
+    </Suspense>
+  );
+}
+
+function AuditPageInner() {
+  const searchParams = useSearchParams();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [chain, setChain] = useState<{ ok: boolean; checked: number; brokenAt?: string } | null>(null);
@@ -90,6 +106,19 @@ export default function AuditPage() {
   } | null>(null);
   const [tab, setTab] = useState<Tab>("all");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [highlightEventId, setHighlightEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab") as Tab | null;
+    const sessionParam = searchParams.get("session");
+    const eventParam = searchParams.get("event");
+    if (tabParam && TABS.some((t) => t.id === tabParam)) setTab(tabParam);
+    if (sessionParam) setSessionId(sessionParam);
+    if (eventParam) {
+      setHighlightEventId(eventParam);
+      setTab("all");
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const tick = async () => {
@@ -109,6 +138,12 @@ export default function AuditPage() {
     if (!sessionId) return [];
     return events.filter((e) => e.sessionId === sessionId);
   }, [events, sessionId]);
+
+  useEffect(() => {
+    if (!highlightEventId) return;
+    const el = document.getElementById(`audit-${highlightEventId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightEventId, sessionEvents, events]);
 
   return (
     <main className="mx-auto max-w-[90rem] px-6 py-10 lg:px-10">
@@ -256,6 +291,7 @@ export default function AuditPage() {
               events={events}
               onSession={setSessionId}
               activeSession={sessionId}
+              highlightEventId={highlightEventId}
             />
           )}
         </section>
@@ -278,15 +314,19 @@ export default function AuditPage() {
             ) : (
               sessionEvents.map((e) => {
                 const { title, tone } = labelFor(e.type);
+                const hot = highlightEventId === e.id;
                 return (
                   <article
                     key={e.id}
-                    className={`border p-3 ${
-                      tone === "bad"
-                        ? "border-danger/35"
-                        : tone === "warn"
-                          ? "border-accent/30"
-                          : "border-line"
+                    id={`audit-${e.id}`}
+                    className={`border p-3 transition-colors ${
+                      hot
+                        ? "border-fg bg-fg/5 ring-2 ring-fg/30"
+                        : tone === "bad"
+                          ? "border-danger/35"
+                          : tone === "warn"
+                            ? "border-accent/30"
+                            : "border-line"
                     }`}
                   >
                     <div className="flex justify-between gap-2">
@@ -299,6 +339,7 @@ export default function AuditPage() {
                         })}
                       </time>
                     </div>
+                    <p className="mt-1 font-mono text-[10px] text-muted">{e.id}</p>
                     <p className="mt-1 text-sm leading-relaxed text-muted">{softReason(e.reason)}</p>
                   </article>
                 );
@@ -368,23 +409,30 @@ function EventList({
   events,
   onSession,
   activeSession,
+  highlightEventId,
 }: {
   events: AuditEvent[];
   onSession: (id: string) => void;
   activeSession: string | null;
+  highlightEventId?: string | null;
 }) {
   if (!events.length) return <Empty />;
   return (
     <ol className="space-y-2">
       {events.slice(0, 60).map((e) => {
         const { title, tone } = labelFor(e.type);
+        const hot = highlightEventId === e.id;
         return (
-          <li key={e.id}>
+          <li key={e.id} id={hot ? `audit-${e.id}` : undefined}>
             <button
               type="button"
               onClick={() => onSession(e.sessionId)}
               className={`w-full border px-4 py-3 text-left hover:border-fg ${
-                activeSession === e.sessionId ? "border-fg bg-card" : "border-line bg-card"
+                hot
+                  ? "border-fg bg-fg/5 ring-2 ring-fg/25"
+                  : activeSession === e.sessionId
+                    ? "border-fg bg-card"
+                    : "border-line bg-card"
               } ${tone === "bad" ? "border-danger/30" : ""}`}
             >
               <div className="flex justify-between gap-2">

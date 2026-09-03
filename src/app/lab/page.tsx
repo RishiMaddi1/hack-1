@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 type LabLogLine = {
@@ -9,12 +9,28 @@ type LabLogLine = {
   msg: string;
 };
 
+type LabEvidence = {
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  highlightKeys?: string[];
+  http?: {
+    method: string;
+    path: string;
+    requestHeaders?: Record<string, string>;
+    requestBody?: unknown;
+    responseStatus: number;
+    responseBody?: unknown;
+  };
+};
+
 type LabResult = {
   attack?: string;
   blocked?: boolean;
   auditId?: string;
   auditReason?: string;
+  sessionId?: string;
   log?: LabLogLine[];
+  evidence?: LabEvidence;
   gate?: { ok: boolean; reason?: string; code?: string };
   error?: string;
 };
@@ -62,12 +78,47 @@ const LEVEL: Record<string, string> = {
   warn: "WARN",
 };
 
+const STEP_MS = 420;
+
+function JsonPanel({
+  title,
+  data,
+  highlightKeys = [],
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  highlightKeys?: string[];
+}) {
+  const keys = Object.keys(data);
+  return (
+    <div className="min-w-0 flex-1 border border-white/10 bg-black/30 p-3">
+      <p className="mb-2 text-[10px] uppercase tracking-wide text-white/45">{title}</p>
+      <pre className="overflow-x-auto font-mono text-[11px] leading-relaxed">
+        {"{\n"}
+        {keys.map((k, i) => {
+          const hot = highlightKeys.includes(k);
+          const val = JSON.stringify(data[k]);
+          return (
+            <span key={k} className={hot ? "text-red-400" : "text-white/75"}>
+              {`  "${k}": ${val}`}
+              {i < keys.length - 1 ? ",\n" : "\n"}
+            </span>
+          );
+        })}
+        {"}"}
+      </pre>
+    </div>
+  );
+}
+
 export default function LabPage() {
   const [sessionId, setSessionId] = useState("");
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const [result, setResult] = useState<LabResult | null>(null);
   const [tookMs, setTookMs] = useState<number | null>(null);
+  const [visibleSteps, setVisibleSteps] = useState(0);
+  const [showEvidence, setShowEvidence] = useState(false);
 
   useEffect(() => {
     const key = "u402_session";
@@ -88,12 +139,37 @@ export default function LabPage() {
     setSessionId(sid);
   }, []);
 
+  useEffect(() => {
+    if (!result?.log?.length || busy) {
+      setVisibleSteps(0);
+      setShowEvidence(false);
+      return;
+    }
+    setVisibleSteps(0);
+    setShowEvidence(false);
+    let i = 0;
+    const id = window.setInterval(() => {
+      i += 1;
+      setVisibleSteps(i);
+      if (i >= (result.log?.length || 0)) {
+        window.clearInterval(id);
+        window.setTimeout(() => setShowEvidence(true), 200);
+      }
+    }, STEP_MS);
+    return () => window.clearInterval(id);
+  }, [result, busy]);
+
+  const visibleLog = useMemo(() => (result?.log || []).slice(0, visibleSteps), [result, visibleSteps]);
+  const streamingDone = Boolean(result?.log?.length && visibleSteps >= result.log.length);
+
   async function run(attack: string) {
     if (!sessionId || busy) return;
     setBusy(true);
     setActive(attack);
     setResult(null);
     setTookMs(null);
+    setVisibleSteps(0);
+    setShowEvidence(false);
     const t0 = performance.now();
     const res = await fetch("/api/lab", {
       method: "POST",
@@ -108,13 +184,20 @@ export default function LabPage() {
 
   const statusLabel = result?.error
     ? "error"
-    : result?.blocked != null
-      ? result.blocked
-        ? "blocked · fail-closed"
-        : "unexpected · investigate"
-      : busy
-        ? "awaiting /api/lab…"
+    : busy
+      ? "awaiting /api/lab…"
+      : result?.blocked != null
+        ? streamingDone
+          ? result.blocked
+            ? "blocked · fail-closed"
+            : "unexpected · investigate"
+          : "replaying detection…"
         : "idle — pick an attack";
+
+  const auditHref =
+    result?.auditId && (result.sessionId || sessionId)
+      ? `/audit?tab=all&session=${encodeURIComponent(result.sessionId || sessionId)}&event=${encodeURIComponent(result.auditId)}`
+      : "/audit";
 
   return (
     <main className="mx-auto max-w-[90rem] px-6 py-10 lg:px-10">
@@ -129,12 +212,12 @@ export default function LabPage() {
       </p>
       <h1 className="mt-2 font-[family-name:var(--font-serif)] text-4xl">Gate lab</h1>
       <p className="mt-2 max-w-2xl text-base leading-relaxed text-muted">
-        Each click is one real <span className="font-mono text-fg">POST /api/lab</span>. The terminal
-        shows that response — no fake wait. Crypto checks are fast; that&apos;s why it feels instant.
+        Each click is one real <span className="font-mono text-fg">POST /api/lab</span>. Steps stream
+        from that response; before/after JSON and HTTP snippets are the proof — not a printed PASS.
         Session: <span className="font-mono text-sm text-fg">{sessionId || "…"}</span>
       </p>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)]">
+      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.25fr)]">
         <div className="space-y-3">
           {ATTACKS.map((a) => (
             <button
@@ -155,7 +238,7 @@ export default function LabPage() {
           ))}
         </div>
 
-        <div className="flex min-h-[28rem] flex-col border border-line bg-[#1a1816] text-[#e8e2d9] dark:bg-[#0f0e0c]">
+        <div className="flex min-h-[32rem] flex-col border border-line bg-[#1a1816] text-[#e8e2d9] dark:bg-[#0f0e0c]">
           <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
             <span className="size-2 rounded-full bg-white/25" />
             <span className="size-2 rounded-full bg-white/25" />
@@ -164,12 +247,12 @@ export default function LabPage() {
             <p className="ml-auto font-mono text-xs uppercase text-white/45">{statusLabel}</p>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[13px] leading-relaxed">
+          <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 font-mono text-[13px] leading-relaxed">
             {!result && !busy ? (
               <p className="text-white/40">
                 $ waiting
                 <br />
-                # pick an attack — round-trip + server log print here
+                # pick an attack — live round-trip, then stepped replay
               </p>
             ) : null}
 
@@ -183,51 +266,112 @@ export default function LabPage() {
 
             {result?.error ? <p className="text-red-400">{result.error}</p> : null}
 
-            {!busy && result?.log
-              ? result.log.map((row, i) => (
-                  <div key={`${row.t}-${i}`} className="mb-2 flex gap-3">
-                    <span className="shrink-0 text-white/35">{row.t}</span>
-                    <span
-                      className={`w-12 shrink-0 ${
-                        row.level === "block"
-                          ? "text-red-400"
-                          : row.level === "warn"
-                            ? "text-orange-400"
-                            : row.level === "pass"
-                              ? "text-emerald-400/90"
-                              : row.level === "try"
-                                ? "text-white"
-                                : "text-white/45"
-                      }`}
-                    >
-                      {LEVEL[row.level] || row.level.toUpperCase()}
-                    </span>
-                    <span className="min-w-0 break-words text-white/85">{row.msg}</span>
-                  </div>
-                ))
-              : null}
+            {visibleLog.map((row, i) => (
+              <div key={`${row.t}-${i}`} className="mb-2 flex gap-3">
+                <span className="shrink-0 text-white/35">{row.t}</span>
+                <span
+                  className={`w-12 shrink-0 ${
+                    row.level === "block"
+                      ? "text-red-400"
+                      : row.level === "warn"
+                        ? "text-orange-400"
+                        : row.level === "pass"
+                          ? "text-emerald-400/90"
+                          : row.level === "try"
+                            ? "text-white"
+                            : "text-white/45"
+                  }`}
+                >
+                  {LEVEL[row.level] || row.level.toUpperCase()}
+                </span>
+                <span className="min-w-0 break-words text-white/85">{row.msg}</span>
+              </div>
+            ))}
 
-            {!busy && result && tookMs != null ? (
+            {!busy && result && !streamingDone ? (
+              <p className="animate-pulse text-white/35">█</p>
+            ) : null}
+
+            {showEvidence && result?.evidence?.before && result?.evidence?.after ? (
+              <div className="mt-4 space-y-2 border-t border-white/10 pt-4">
+                <p className="text-[10px] uppercase tracking-wide text-white/45">
+                  Evidence · before / after
+                  {result.evidence.highlightKeys?.length
+                    ? ` · red = ${result.evidence.highlightKeys.join(", ")}`
+                    : ""}
+                </p>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <JsonPanel
+                    title="before"
+                    data={result.evidence.before}
+                    highlightKeys={result.evidence.highlightKeys}
+                  />
+                  <JsonPanel
+                    title="after"
+                    data={result.evidence.after}
+                    highlightKeys={result.evidence.highlightKeys}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {showEvidence && result?.evidence?.http ? (
+              <div className="mt-4 space-y-2 border-t border-white/10 pt-4">
+                <p className="text-[10px] uppercase tracking-wide text-white/45">
+                  HTTP · {result.evidence.http.method} {result.evidence.http.path}
+                </p>
+                <div className="border border-white/10 bg-black/30 p-3 text-[11px]">
+                  {result.evidence.http.requestHeaders ? (
+                    <p className="mb-2 text-white/55">
+                      headers: {JSON.stringify(result.evidence.http.requestHeaders)}
+                    </p>
+                  ) : null}
+                  <p className="mb-1 text-white/45">request</p>
+                  <pre className="mb-3 overflow-x-auto whitespace-pre-wrap text-white/80">
+                    {JSON.stringify(result.evidence.http.requestBody, null, 2)}
+                  </pre>
+                  <p
+                    className={`mb-1 ${
+                      result.evidence.http.responseStatus >= 400 ? "text-red-400" : "text-emerald-400/90"
+                    }`}
+                  >
+                    ← HTTP {result.evidence.http.responseStatus}
+                  </p>
+                  <pre className="overflow-x-auto whitespace-pre-wrap text-white/80">
+                    {JSON.stringify(result.evidence.http.responseBody, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            ) : null}
+
+            {!busy && streamingDone && tookMs != null ? (
               <p className="mt-3 text-white/35">
-                $ round-trip {tookMs}ms · {result.log?.length || 0} steps
+                $ server {tookMs}ms · replay {(result?.log?.length || 0) * STEP_MS}ms ·{" "}
+                {result?.log?.length || 0} steps
               </p>
             ) : null}
           </div>
 
-          {result && !busy && (result.auditReason || result.auditId) ? (
-            <div className="border-t border-white/10 px-4 py-3 text-sm text-white/55">
+          {showEvidence && result && (result.auditReason || result.auditId) ? (
+            <div className="space-y-3 border-t border-white/10 px-4 py-4">
               {result.auditReason ? (
-                <p>
-                  <span className="text-white/80">audit: </span>
+                <p className="text-sm text-white/60">
+                  <span className="text-white/85">audit: </span>
                   {result.auditReason}
                 </p>
               ) : null}
-              <p className="mt-1 font-mono text-xs text-white/40">
-                {result.auditId ? `${result.auditId} · ` : null}
-                <Link href="/audit" className="underline hover:text-white/70">
-                  open /audit
+              {result.auditId ? (
+                <Link
+                  href={auditHref}
+                  className="inline-flex w-full items-center justify-center bg-fg px-4 py-3 text-center text-sm font-medium text-bg"
+                >
+                  Open this audit event → {result.auditId}
                 </Link>
-              </p>
+              ) : (
+                <Link href="/audit" className="text-sm text-white/50 underline hover:text-white/80">
+                  Open /audit
+                </Link>
+              )}
             </div>
           ) : null}
         </div>

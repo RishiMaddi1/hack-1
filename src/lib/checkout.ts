@@ -470,7 +470,7 @@ export function simulateDoubleCapture(sessionId: string) {
   const second = applyCapture(record, `pay_race_${checkoutId.slice(4, 10)}`, orderId, "client");
   const remainingAfter = db.mandates[session.mandateId]?.remainingPaise ?? 0;
   const spent = remainingBefore - remainingAfter;
-  writeAudit({
+  const audit = writeAudit({
     sessionId,
     type: "lab.double_capture",
     explainable: true,
@@ -492,6 +492,7 @@ export function simulateDoubleCapture(sessionId: string) {
     orderId,
     firstApplied: first,
     secondApplied: second,
+    auditId: audit.id,
     message:
       spent === amountPaise && !second
         ? "Webhook and client both fired. Mandate only dropped once."

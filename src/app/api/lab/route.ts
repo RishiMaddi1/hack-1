@@ -9,11 +9,28 @@ import { getMandateForSession, mutateCart } from "@/lib/cart";
 import { verifyWebhookSignature } from "@/lib/razorpay";
 import { quoteCheckout, simulateDoubleCapture } from "@/lib/checkout";
 import { clientKey, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import type { Mandate } from "@/lib/types";
 
 export type LabLogLine = {
   t: string;
-  level: "info" | "try" | "check" | "pass" | "block" | "warn";
+  level: "info" | "try" | "check" | "pass" | "block" | "warn" | "sys";
   msg: string;
+};
+
+export type LabHttpEvidence = {
+  method: string;
+  path: string;
+  requestHeaders?: Record<string, string>;
+  requestBody?: unknown;
+  responseStatus: number;
+  responseBody?: unknown;
+};
+
+export type LabEvidence = {
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  highlightKeys?: string[];
+  http?: LabHttpEvidence;
 };
 
 function now() {
@@ -24,8 +41,19 @@ function line(level: LabLogLine["level"], msg: string): LabLogLine {
   return { t: now(), level, msg };
 }
 
+function mandateSnap(m: Mandate): Record<string, unknown> {
+  return {
+    id: m.id,
+    maxPaise: m.maxPaise,
+    remainingPaise: m.remainingPaise,
+    expiresAt: m.expiresAt,
+    kid: m.kid || null,
+    signature: `${String(m.signature || "").slice(0, 28)}…`,
+  };
+}
+
 /**
- * Adversarial demos — each attack runs real verify/gate/checkout code and returns a step log.
+ * Adversarial demos — each attack runs real verify/gate/checkout code and returns a step log + evidence.
  */
 export async function POST(request: Request) {
   const body = (await request.json()) as {
@@ -58,6 +86,8 @@ export async function POST(request: Request) {
 
   if (body.attack === "forge_remaining") {
     const log: LabLogLine[] = [];
+    const before = mandateSnap(mandate);
+    log.push(line("sys", `POST /api/lab · attack=forge_remaining · session=${body.sessionId}`));
     log.push(line("info", `Loaded live mandate ${mandate.id}`));
     log.push(
       line(
@@ -69,10 +99,11 @@ export async function POST(request: Request) {
       ...mandate,
       remainingPaise: mandate.maxPaise * 10,
     };
+    const after = mandateSnap(forged);
     log.push(
       line(
         "try",
-        `Attack: mutate remainingPaise → ₹${forged.remainingPaise / 100} (10× max) without buyer re-sign`,
+        `Attack: mutate remainingPaise ${before.remainingPaise} → ${after.remainingPaise} (10× max) without buyer re-sign`,
       ),
     );
     log.push(line("check", "Calling verifyMandate(forged) — Ed25519 over canonical claims + signature"));
@@ -93,7 +124,12 @@ export async function POST(request: Request) {
         ? line("warn", `gateCart allowed checkout — ${"code" in gate ? gate.code : "ok"}`)
         : line("block", `gateCart blocked — ${"code" in gate ? gate.code : "BLOCKED"}: ${gate.reason || "rejected"}`),
     );
-    log.push(line("pass", "No Razorpay Order created"));
+    log.push(line("pass", "No Razorpay Order created — fail closed before money path"));
+    const evidence: LabEvidence = {
+      before,
+      after,
+      highlightKeys: ["remainingPaise"],
+    };
     const audit = writeAudit({
       sessionId: body.sessionId,
       type: "lab.forge_remaining",
@@ -103,7 +139,7 @@ export async function POST(request: Request) {
       reason: ok
         ? "UNEXPECTED: forged remaining verified — keys misconfigured."
         : `Forged remainingPaise to ₹${forged.remainingPaise / 100} without buyer re-sign. Signature check failed. No Order.`,
-      data: { ok, gate, log },
+      data: { ok, gate, evidence },
     });
     return NextResponse.json({
       attack: body.attack,
@@ -111,14 +147,18 @@ export async function POST(request: Request) {
       verifyOk: ok,
       gate,
       log,
+      evidence,
       auditId: audit.id,
       auditReason: audit.reason,
+      sessionId: body.sessionId,
     });
   }
 
   if (body.attack === "replay_stale") {
     const log: LabLogLine[] = [];
     const stale = { ...mandate };
+    const before = mandateSnap(stale);
+    log.push(line("sys", `POST /api/lab · attack=replay_stale · session=${body.sessionId}`));
     log.push(
       line(
         "info",
@@ -137,6 +177,7 @@ export async function POST(request: Request) {
     });
     Object.assign(mandate, lowered);
     saveDb();
+    const after = mandateSnap(getMandateForSession(body.sessionId));
     log.push(line("try", "Buyer lowers live cap — issueMandate(max ₹2,000) written to session store"));
     log.push(
       line("info", `Live mandate now: remaining ₹${mandate.remainingPaise / 100}, new signature`),
@@ -166,6 +207,11 @@ export async function POST(request: Request) {
         : line("warn", "Replay check inconclusive"),
     );
     log.push(line("pass", "Cap stays at live remaining; replay cannot raise it"));
+    const evidence: LabEvidence = {
+      before,
+      after,
+      highlightKeys: ["remainingPaise", "maxPaise", "signature"],
+    };
     const audit = writeAudit({
       sessionId: body.sessionId,
       type: "lab.replay_stale",
@@ -179,7 +225,7 @@ export async function POST(request: Request) {
         staleRemaining: stale.remainingPaise,
         liveRemaining: current.remainingPaise,
         staleSigStillValidForOldClaims: replayOk,
-        log,
+        evidence,
       },
     });
     return NextResponse.json({
@@ -191,13 +237,17 @@ export async function POST(request: Request) {
         maxPaise: current.maxPaise,
       },
       log,
+      evidence,
       auditId: audit.id,
       auditReason: audit.reason,
+      sessionId: body.sessionId,
     });
   }
 
   if (body.attack === "expire_now") {
     const log: LabLogLine[] = [];
+    const before = mandateSnap(mandate);
+    log.push(line("sys", `POST /api/lab · attack=expire_now · session=${body.sessionId}`));
     log.push(line("info", `Live mandate ${mandate.id} expiresAt=${mandate.expiresAt}`));
     const expired = issueMandate({
       id: mandate.id,
@@ -211,6 +261,7 @@ export async function POST(request: Request) {
     });
     Object.assign(mandate, expired);
     saveDb();
+    const after = mandateSnap(mandate);
     log.push(line("try", `Attack: rewrite expiresAt to ${mandate.expiresAt} (already past) + re-sign`));
     const priced = priceCart(
       session.cart.length
@@ -230,6 +281,11 @@ export async function POST(request: Request) {
         : line("block", `gateCart → ${"code" in gate ? gate.code : "BLOCKED"}: ${gate.reason}`),
     );
     log.push(line("pass", "Checkout stopped before Razorpay Order"));
+    const evidence: LabEvidence = {
+      before,
+      after,
+      highlightKeys: ["expiresAt", "signature"],
+    };
     const audit = writeAudit({
       sessionId: body.sessionId,
       type: "mandate.expired",
@@ -237,7 +293,7 @@ export async function POST(request: Request) {
       bounded: true,
       gated: true,
       reason: `Mandate ${mandate.id} expired mid-session. Gate: ${gate.reason}`,
-      data: { expiresAt: mandate.expiresAt, gate, log },
+      data: { expiresAt: mandate.expiresAt, gate, evidence },
     });
     return NextResponse.json({
       attack: body.attack,
@@ -245,28 +301,47 @@ export async function POST(request: Request) {
       gate,
       mandate: { id: mandate.id, expiresAt: mandate.expiresAt },
       log,
+      evidence,
       auditId: audit.id,
       auditReason: audit.reason,
+      sessionId: body.sessionId,
     });
   }
 
   if (body.attack === "bad_webhook") {
     const log: LabLogLine[] = [];
-    const raw = JSON.stringify({
+    const rawObj = {
       event: "payment.captured",
-      payload: { payment: { entity: { id: "pay_fake", order_id: "order_fake" } } },
-    });
-    log.push(line("info", `Webhook body: ${raw.slice(0, 80)}…`));
+      payload: { payment: { entity: { id: "pay_fake", order_id: "order_fake", amount: 59900 } } },
+    };
+    const raw = JSON.stringify(rawObj);
+    log.push(line("sys", `POST /api/lab · attack=bad_webhook · session=${body.sessionId}`));
+    log.push(line("info", `Webhook body bytes: ${raw.length} · event=payment.captured`));
     const badSig = createHmac("sha256", "wrong-secret").update(raw).digest("hex");
-    log.push(line("try", `Attack: HMAC-SHA256 with secret "wrong-secret" → ${badSig.slice(0, 16)}…`));
+    log.push(line("try", `Attack: HMAC-SHA256 with secret "wrong-secret" → ${badSig.slice(0, 24)}…`));
     log.push(line("check", "verifyWebhookSignature(raw, badSig) — same helper as POST /api/webhooks/razorpay"));
     const ok = verifyWebhookSignature(raw, badSig);
+    const responseStatus = ok ? 200 : 400;
+    const responseBody = ok ? { ok: true } : { error: "bad signature" };
     log.push(
       ok
         ? line("warn", "Signature accepted — unexpected")
-        : line("block", "Signature rejected (would be HTTP 400; payment.captured ignored)"),
+        : line("block", `Signature rejected → would return HTTP ${responseStatus} ${JSON.stringify(responseBody)}`),
     );
-    log.push(line("pass", "No capture applied"));
+    log.push(line("pass", "No capture applied — payment.captured ignored"));
+    const evidence: LabEvidence = {
+      http: {
+        method: "POST",
+        path: "/api/webhooks/razorpay",
+        requestHeaders: {
+          "Content-Type": "application/json",
+          "X-Razorpay-Signature": `${badSig.slice(0, 32)}…`,
+        },
+        requestBody: rawObj,
+        responseStatus,
+        responseBody,
+      },
+    };
     const audit = writeAudit({
       sessionId: body.sessionId,
       type: "lab.bad_webhook",
@@ -276,25 +351,28 @@ export async function POST(request: Request) {
       reason: ok
         ? "UNEXPECTED: bad webhook signature accepted."
         : "Webhook with wrong HMAC rejected (would be HTTP 400). Signature is load-bearing.",
-      data: { accepted: ok, log },
+      data: { accepted: ok, evidence },
     });
     return NextResponse.json({
       attack: body.attack,
       blocked: !ok,
       log,
+      evidence,
       auditId: audit.id,
       auditReason: audit.reason,
+      sessionId: body.sessionId,
     });
   }
 
   if (body.attack === "double_capture") {
     const log: LabLogLine[] = [];
+    log.push(line("sys", `POST /api/lab · attack=double_capture · session=${body.sessionId}`));
     log.push(line("info", "Create quoted checkout (Harpy ₹599) to race capture paths"));
     const result = simulateDoubleCapture(body.sessionId);
     log.push(
       line(
         "info",
-        `Mandate remaining before: ₹${result.remainingBefore / 100} · checkout ${result.checkoutId}`,
+        `Mandate remaining before: ₹${result.remainingBefore / 100} · checkout ${result.checkoutId} · ${result.orderId}`,
       ),
     );
     log.push(line("try", "Path A: webhook payment.captured → applyCapture(…, webhook)"));
@@ -320,6 +398,21 @@ export async function POST(request: Request) {
         ? line("pass", "Race survived: mandate debited once")
         : line("warn", "Unexpected race outcome — inspect applyCapture"),
     );
+    const evidence: LabEvidence = {
+      before: {
+        remainingPaise: result.remainingBefore,
+        checkoutStatus: "quoted",
+        orderId: result.orderId,
+      },
+      after: {
+        remainingPaise: result.remainingAfter,
+        checkoutStatus: "paid",
+        firstApplied: result.firstApplied,
+        secondApplied: result.secondApplied,
+        spentPaise: result.spent,
+      },
+      highlightKeys: ["remainingPaise", "secondApplied"],
+    };
     return NextResponse.json({
       attack: body.attack,
       blocked: result.blocked,
@@ -327,7 +420,10 @@ export async function POST(request: Request) {
       remainingAfter: result.remainingAfter,
       spent: result.spent,
       log,
+      evidence,
+      auditId: result.auditId,
       auditReason: result.message,
+      sessionId: body.sessionId,
     });
   }
 
@@ -335,7 +431,13 @@ export async function POST(request: Request) {
     const log: LabLogLine[] = [];
     mutateCart(body.sessionId, "clear");
     mutateCart(body.sessionId, "add", "harpy-black-light-weight-rgb-gaming-mouse", 1);
+    log.push(line("sys", `POST /api/lab · attack=underpay · session=${body.sessionId}`));
     log.push(line("info", "Cart set to Harpy mouse (catalog price ₹599)"));
+    const attackBody = {
+      sessionId: body.sessionId,
+      amountPaise: 100,
+      note: "client/agent attempted Order amount",
+    };
     log.push(line("try", "Attack: client/agent sends amountPaise=100 (₹1) on quote"));
     writeAudit({
       sessionId: body.sessionId,
@@ -346,43 +448,68 @@ export async function POST(request: Request) {
       reason: "Lab: agent/client asked for amountPaise=100 (₹1). Server ignores client amounts.",
       data: { attemptedAmountPaise: 100 },
     });
-    log.push(line("check", "quoteCheckout(sessionId) — server prices from cart storage only"));
+    log.push(line("check", "quoteCheckout(sessionId) — server prices from cart storage only (ignores amountPaise)"));
     const result = await quoteCheckout(body.sessionId);
     const quoted =
       result.status === 402 || result.status === 403
         ? (result.body as {
-            breakdown?: { payablePaise?: number };
-            accepts?: Array<{ amountPaise?: number }>;
+            error?: string;
+            breakdown?: { payablePaise?: number; explanation?: string };
+            accepts?: Array<{ amountPaise?: number; orderId?: string }>;
+            paymentLinkUrl?: string;
           })
         : null;
     const payable = quoted?.breakdown?.payablePaise ?? quoted?.accepts?.[0]?.amountPaise ?? 0;
+    const responseSnippet = {
+      status: result.status,
+      error: quoted?.error,
+      payablePaise: payable,
+      orderId: quoted?.accepts?.[0]?.orderId,
+      paymentLinkUrl: quoted?.paymentLinkUrl,
+      explanation: quoted?.breakdown?.explanation?.slice(0, 120),
+    };
     log.push(line("info", `HTTP ${result.status} · quoted payable ₹${payable / 100}`));
-    const blocked = payable === 59900;
+    const blocked = payable === 59900 || (payable > 100 && payable !== 100);
     log.push(
-      blocked
-        ? line("block", "Client ₹1 ignored — Order amount came from priced cart (₹599)")
+      blocked && payable !== 100
+        ? line("block", `Client ₹1 ignored — Order amount came from priced cart (₹${payable / 100})`)
         : line("warn", `Unexpected payable ₹${payable / 100}`),
     );
     log.push(line("pass", "LLM / client never chooses Razorpay Order amount"));
+    const evidence: LabEvidence = {
+      before: { clientAmountPaise: 100, cartSku: "harpy-black-light-weight-rgb-gaming-mouse" },
+      after: { serverPayablePaise: payable, httpStatus: result.status },
+      highlightKeys: ["clientAmountPaise", "serverPayablePaise"],
+      http: {
+        method: "POST",
+        path: "/api/checkout",
+        requestBody: attackBody,
+        responseStatus: result.status,
+        responseBody: responseSnippet,
+      },
+    };
     const audit = writeAudit({
       sessionId: body.sessionId,
       type: "lab.underpay",
       explainable: true,
       bounded: true,
       gated: true,
-      reason: blocked
-        ? `Agent said charge ₹1. Server quoted ₹${payable / 100} from cart.`
-        : `Unexpected payable ${payable}`,
-      data: { attemptedAmountPaise: 100, payablePaise: payable, status: result.status, log },
+      reason:
+        payable !== 100
+          ? `Agent said charge ₹1. Server quoted ₹${payable / 100} from cart.`
+          : `Unexpected payable ${payable}`,
+      data: { attemptedAmountPaise: 100, payablePaise: payable, status: result.status, evidence },
     });
     return NextResponse.json({
       attack: body.attack,
-      blocked,
+      blocked: payable !== 100,
       payablePaise: payable,
       status: result.status,
       log,
+      evidence,
       auditId: audit.id,
       auditReason: audit.reason,
+      sessionId: body.sessionId,
     });
   }
 
