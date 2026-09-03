@@ -91,10 +91,6 @@ function isKeyboard(p: NamedSku) {
   return productCategory(p.sku) === "keyboard";
 }
 
-function isController(p: NamedSku) {
-  return productCategory(p.sku) === "controller";
-}
-
 function cartAsNamed(sessionId: string): NamedSku[] {
   return getCart(sessionId)
     .map((l) => {
@@ -110,68 +106,130 @@ function isRemoveIntent(text: string) {
   );
 }
 
-/** Remove from the live cart — prefer cart lines over suggestion cards. */
-function looksLikeControllerToken(token: string): boolean {
-  const t = token.toLowerCase().replace(/[^a-z]/g, "");
-  if (t.length < 7) return false;
-  if (t.includes("keyboa") || t.includes("kayboa") || t.includes("keyboard")) return false;
-  if (t.includes("control") || t.includes("gamepad")) return true;
-  // Ordered letter overlap with "controller" (catches cotnroller / controllr)
-  const target = "controller";
+const REMOVE_STOP = new Set([
+  ...STOP,
+  "remove",
+  "removed",
+  "drop",
+  "dropped",
+  "delete",
+  "deleted",
+  "rid",
+  "out",
+  "from",
+  "bag",
+  "cart",
+  "basket",
+  "any",
+  "one",
+  "some",
+  "please",
+  "said",
+  "item",
+  "items",
+  "line",
+  "product",
+]);
+
+/** Buyer words left after stripping remove-boilerplate — fed to catalog search. */
+function removeSearchQuery(text: string): string {
+  return norm(text)
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !REMOVE_STOP.has(w))
+    .join(" ");
+}
+
+function orderedOverlap(hay: string, needle: string): number {
+  const h = hay.toLowerCase();
+  const n = needle.toLowerCase();
   let ti = 0;
-  for (const ch of t) {
-    const idx = target.indexOf(ch, ti);
-    if (idx >= 0) ti = idx + 1;
+  for (const ch of n) {
+    const idx = h.indexOf(ch, ti);
+    if (idx < 0) break;
+    ti = idx + 1;
   }
-  return ti >= 8;
+  return ti;
 }
 
-function mentionsCategory(text: string, kind: "controller" | "keyboard" | "mouse" | "pad"): boolean {
-  const lower = text.toLowerCase();
-  if (kind === "controller") {
-    if (/game\s*pad/.test(lower)) return true;
-    return lower.split(/\s+/).some(looksLikeControllerToken);
-  }
-  if (kind === "keyboard") return /keyboa|kayboa|keyboard|\bkb\b/i.test(lower);
-  if (kind === "mouse") return /\bmouse\b|\bmice\b/i.test(lower) && !/pad|deskmat/i.test(lower);
-  return /\b(mouse\s*pads?|deskmat)\b/i.test(lower);
-}
-
+/**
+ * Resolve which cart line to drop using only the live bag + catalog search.
+ * No per-category word lists — searchCatalog / name scores decide.
+ */
 function resolveRemoveSku(sessionId: string, text: string, history: ChatTurn[]): string | undefined {
   const cart = cartAsNamed(sessionId);
-  const lower = text.toLowerCase();
-  const anyOne = /\b(any|one|a|an)\b/i.test(lower);
+  if (!cart.length) return undefined;
 
-  if (mentionsCategory(text, "controller")) {
-    const hit = cart.find(isController);
-    if (hit) return hit.sku;
+  // 1) Strong name/sku hit against what's actually in the bag
+  let bestSku: string | undefined;
+  let bestScore = 0;
+  for (const item of cart) {
+    const s = nameMatchScore(item, text);
+    if (s > bestScore) {
+      bestScore = s;
+      bestSku = item.sku;
+    }
   }
-  if (mentionsCategory(text, "keyboard")) {
-    const hit = cart.find(isKeyboard);
-    if (hit) return hit.sku;
-  }
-  if (mentionsCategory(text, "mouse")) {
-    const hit = cart.find(isMouse);
-    if (hit) return hit.sku;
-  }
-  if (mentionsCategory(text, "pad")) {
-    const hit = cart.find(isPad);
-    if (hit) return hit.sku;
-  }
+  if (bestSku && bestScore >= 4) return bestSku;
 
-  const fromCart = bestInPool(cart, text);
-  if (fromCart) return fromCart;
-
-  // “remove any one” / vague — drop the most expensive cart line
-  if (anyOne && cart.length) {
-    const priced = [...cart].sort(
+  // 2) Catalog search on leftover tokens → intersect with bag (by sku, then by category)
+  const q = removeSearchQuery(text);
+  const hits = q ? searchCatalog(q) : [];
+  for (const h of hits) {
+    if (cart.some((c) => c.sku === h.sku)) return h.sku;
+  }
+  const cats = new Set(hits.slice(0, 6).map((h) => h.category));
+  const sameCat = cart.filter((c) => {
+    const p = getProduct(c.sku);
+    return Boolean(p && cats.has(p.category));
+  });
+  if (sameCat.length === 1) return sameCat[0]!.sku;
+  if (sameCat.length > 1) {
+    const named = bestInPool(sameCat, text);
+    if (named) return named;
+    return [...sameCat].sort(
       (a, b) => (getProduct(b.sku)?.pricePaise || 0) - (getProduct(a.sku)?.pricePaise || 0),
-    );
-    return priced[0]?.sku;
+    )[0]!.sku;
   }
 
-  // Only resolve against the live bag + shown cards — never invent a catalog SKU to "remove"
-  return findSkuInText(text, [...cart, ...shownFromContext(sessionId, history)]);
+  // 3) Fuzzy: query tokens vs each cart line's catalog fields (name/tags/category)
+  if (q) {
+    let fuzzySku: string | undefined;
+    let fuzzyScore = 0;
+    for (const item of cart) {
+      const p = getProduct(item.sku);
+      if (!p) continue;
+      const hay = `${p.name} ${p.sku} ${p.category} ${p.tags.join(" ")}`.toLowerCase();
+      let score = 0;
+      for (const tok of q.split(/\s+/)) {
+        if (tok.length < 3) continue;
+        if (hay.includes(tok)) score += 6;
+        else {
+          const need = Math.ceil(tok.length * 0.7);
+          if (orderedOverlap(hay, tok) >= need) score += 5;
+          for (const part of hay.split(/[^a-z0-9]+/)) {
+            if (part.length >= 4 && orderedOverlap(part, tok) >= need) score += 4;
+          }
+        }
+      }
+      if (score > fuzzyScore) {
+        fuzzyScore = score;
+        fuzzySku = item.sku;
+      }
+    }
+    if (fuzzySku && fuzzyScore >= 5) return fuzzySku;
+  }
+
+  // 4) Vague “any one” with no match → priciest bag line
+  if (/\b(any|one|a|an)\b/i.test(text)) {
+    return [...cart].sort(
+      (a, b) => (getProduct(b.sku)?.pricePaise || 0) - (getProduct(a.sku)?.pricePaise || 0),
+    )[0]!.sku;
+  }
+
+  // 5) Shown cards only if that SKU is still in the bag
+  const shown = findSkuInText(text, [...cart, ...shownFromContext(sessionId, history)]);
+  if (shown && cart.some((c) => c.sku === shown)) return shown;
+  return undefined;
 }
 
 /** Score how well buyer text points at a known product name/sku (no hardcoded SKUs). */

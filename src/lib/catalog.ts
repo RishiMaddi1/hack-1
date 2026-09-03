@@ -675,12 +675,34 @@ export function searchCatalog(query: string, budgetPaise?: number): Product[] {
   if (!q) return PRODUCTS.slice(0, 8);
 
   const words = q.split(/\s+/).filter(Boolean);
+
+  function orderedOverlap(hay: string, needle: string): number {
+    let ti = 0;
+    for (const ch of needle) {
+      const idx = hay.indexOf(ch, ti);
+      if (idx < 0) break;
+      ti = idx + 1;
+    }
+    return ti;
+  }
+
   const scored = PRODUCTS.map((p) => {
     const hay = `${p.name} ${p.short} ${p.details} ${p.category} ${p.tags.join(" ")}`.toLowerCase();
     let score = 0;
     for (const w of words) {
       if (hay.includes(w)) score += 2;
       if (p.name.toLowerCase().includes(w)) score += 2;
+      // Typo-tolerant: ordered letter overlap vs category / tags / name tokens
+      if (w.length >= 5) {
+        const need = Math.ceil(w.length * 0.7);
+        if (orderedOverlap(p.category, w) >= need) score += 3;
+        for (const part of hay.split(/[^a-z0-9]+/)) {
+          if (part.length >= 4 && orderedOverlap(part, w) >= need) {
+            score += 2;
+            break;
+          }
+        }
+      }
     }
     if (budgetPaise && p.pricePaise > budgetPaise) score -= 2;
     if (/keyboard|hive|swarm|mechanical/.test(q) && p.category === "keyboard") score += 4;
