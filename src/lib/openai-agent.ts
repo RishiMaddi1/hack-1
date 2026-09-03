@@ -51,11 +51,16 @@ const TOOLS = [
     function: {
       name: "remove_from_cart",
       description:
-        "Remove a SKU that is already in the cart. Call get_cart first if unsure which line to drop. Never call add_to_cart when the buyer asked to remove.",
+        "Remove a line that is already in the bag. Prefer exact sku from get_cart. If the buyer used a vague name or typo, pass query and the server matches against the live bag via catalog search. Never call add_to_cart on a remove request.",
       parameters: {
         type: "object",
-        properties: { sku: { type: "string" } },
-        required: ["sku"],
+        properties: {
+          sku: { type: "string", description: "Exact cart SKU when known" },
+          query: {
+            type: "string",
+            description: "Buyer words for the item (typos ok) when sku is unknown",
+          },
+        },
       },
     },
   },
@@ -175,9 +180,66 @@ async function runTool(sessionId: string, name: string, args: Record<string, unk
     };
   }
   if (name === "remove_from_cart") {
-    const sku = String(args.sku || "");
+    const cart = getCart(sessionId);
+    let sku = String(args.sku || "");
+    const query = String(args.query || "").trim();
+
+    if (!sku || !cart.some((l) => l.sku === sku)) {
+      // Resolve against the live bag using catalog search — no word lists
+      const needle = query || sku;
+      if (needle) {
+        const hits = searchCatalog(needle);
+        const bySku = hits.find((h) => cart.some((l) => l.sku === h.sku));
+        if (bySku) {
+          sku = bySku.sku;
+        } else {
+          const cats = new Set(hits.slice(0, 6).map((h) => h.category));
+          const sameCat = cart.filter((l) => {
+            const p = getProduct(l.sku);
+            return Boolean(p && cats.has(p.category));
+          });
+          if (sameCat.length === 1) sku = sameCat[0]!.sku;
+          else if (sameCat.length > 1) {
+            sku = [...sameCat].sort(
+              (a, b) => (getProduct(b.sku)?.pricePaise || 0) - (getProduct(a.sku)?.pricePaise || 0),
+            )[0]!.sku;
+          }
+        }
+      }
+    }
+
+    if (!sku || !cart.some((l) => l.sku === sku)) {
+      return {
+        error: "Could not match a bag line. Call get_cart and pick an exact sku.",
+        bag: cart.map((l) => ({
+          sku: l.sku,
+          name: getProduct(l.sku)?.name || l.sku,
+          qty: l.qty,
+        })),
+      };
+    }
+
+    const removedName = getProduct(sku)?.name || sku;
     mutateCart(sessionId, "remove", sku);
-    return { ok: true };
+    const priced = priceCart(getCart(sessionId));
+    for (const l of priced.lines) hintSku(acc, l.sku);
+    acc.products = priced.lines
+      .map((l) => getProduct(l.sku))
+      .filter(Boolean)
+      .map((p) => toCard(p!));
+    acc.showCart = true;
+    return {
+      ok: true,
+      removed: { sku, name: removedName },
+      cartPayable: cartPayableRef(),
+      lines: priced.lines.map((l) => ({
+        sku: l.sku,
+        name: l.name,
+        qty: l.qty,
+        line: lineRef(l.sku),
+      })),
+      note: PRICE_TOKEN_HELP,
+    };
   }
   if (name === "get_cart") {
     const cart = getCart(sessionId);
@@ -293,24 +355,32 @@ export async function runOpenAIBuyer(
   if (!key) return null;
 
   const wantsPay = /\b(pay|checkout|place order|buy now|settle|complete payment)\b/i.test(text);
-  const system = `You are the buyer agent for Circuit, a gaming desk store in Bengaluru.
-You shop and you settle. Never invent SKUs.
-You receive the full recent chat — you are NOT blind each turn. Use prior turns when the buyer says “the second one”, “that mouse”, “add those”, etc.
+  const cartNow = getCart(sessionId);
+  const pricedNow = priceCart(cartNow);
+  const bagBlock = cartNow.length
+    ? `CURRENT BAG (source of truth for remove/add):\n${cartNow
+        .map((l) => {
+          const p = getProduct(l.sku);
+          return `- sku=${l.sku} name=${p?.name || l.sku} qty=${l.qty} category=${p?.category || "?"}`;
+        })
+        .join("\n")}\nPayable token: ${cartPayableRef()}`
+    : "CURRENT BAG: empty.";
+
+  const system = `You are the buyer agent for this merchant storefront (Circuit / u402 demo).
+You shop and you settle using tools. Never invent SKUs — only use SKUs from search_catalog, get_cart, or LAST SUGGESTIONS.
 PRICE SECURITY: ${PRICE_TOKEN_HELP}
-Example: "This mouse is {{p:some-catalog-sku}}." Never invent ₹ amounts or digits.
+Example: "This item is {{p:some-catalog-sku}}." Never invent ₹ amounts or digits.
 Buyer spend is gated by a signed mandate: max {{mandate.max}}, remaining {{mandate.remaining}} (tokens — do not invent numbers).
-If they want something over remaining budget, say so and do not fight the gate.
 The UI already renders product cards. Your text is 1–2 short sentences. No markdown, no **stars**, no Price/Short lists.
-Always mention a same-category step-up (costlier SKU in the same lane) when the tool returns upgrade — use price tokens. Only mention a different-category add-on when upgrade is cross-category (already at the top of the lane). Also mention one pair-with item when returned.
-When they ask what's in the cart / bag / basket, call get_cart so the UI can show the lines.
-When they ask to remove / drop / delete an item (including typos), call get_cart if needed then remove_from_cart with that cart SKU. Never add_to_cart on a remove request. Vague “any one X” means one matching line already in the bag.
-When they ask about deals, offers, discounts, or sales, call list_offers and mention the live campaign in plain words.
-When they say add the 1st/2nd/3rd suggested item, “the upgrade”, “the step up”, or a lane you already showed, use chat history + LAST SUGGESTIONS — call add_to_cart with those exact SKUs (can call multiple times), then get_cart. Do not ask which one if the ordinal is clear.
-When they want to pay / checkout / settle / buy the cart, you MUST call quote_checkout with NO arguments. Do not tell them to click a Checkout button. Never pass amount/price fields.
-After a 402, say you created the Razorpay Order for {{cart.payable}} — confirm in Razorpay Checkout.
-If quote_checkout returns error "Cart is empty.", tell them to add items first (cards in chat are suggestions until Add to bag).
-If quote_checkout returns a Razorpay Order failed message, repeat that exact failure briefly — do not invent mandate advice.
-After a 403 (mandate_exceeded / expired / bad signature), no Order was created. If negotiate tips appear in tools, propose ONE concrete counter and apply it with tools — same buyer agent, not a second negotiator.
+Always mention a same-category step-up when the tool returns upgrade — use price tokens. Mention one pair-with item when returned.
+When they ask what's in the cart / bag / basket, call get_cart.
+When they ask to remove / drop / delete / take out an item (typos are fine), call get_cart if needed, then remove_from_cart with sku and/or query. Never call add_to_cart on a remove request. Vague “any one X” = one matching bag line.
+When they ask about deals / offers, call list_offers.
+When they want to add something (including “the 1st/2nd”, “the first one”, “the upgrade”, a name, or a typo like kayboard/cotnroller), use LAST SUGGESTIONS Match N skus + search_catalog, then add_to_cart with those exact SKUs, then get_cart. “First one” means Match 1 — never renumber from your reply text. If they say add a cheap / any X, search and add the cheapest matching SKU immediately — do not only list options. Add only what they asked for — not every pair card.
+When they want to pay / checkout / settle / buy the cart, call quote_checkout with NO arguments. Never pass amount/price fields.
+After a 402, say you created the Razorpay Order for {{cart.payable}}.
+If quote_checkout returns "Cart is empty.", tell them to add items first (cards are suggestions until added).
+After a 403, no Order was created — use negotiate tips if present.
 If mandate expired, tell them to re-authorise a spend cap in Cart.`;
 
   const messages: OaiMessage[] = [{ role: "system", content: system }];
@@ -347,10 +417,11 @@ If mandate expired, tell them to re-authorise a spend cap in Cart.`;
 
   messages.push({
     role: "user",
-    content: `${formatSuggestContext(sessionId)}\n\nBuyer message: ${text}`,
+    content: `${formatSuggestContext(sessionId)}\n\n${bagBlock}\nMandate: max ${mandateMaxRef()} remaining ${mandateRemainingRef()} (tokens).\nBag payable hint: ${pricedNow.payablePaise ? cartPayableRef() : "empty"}.\n\nBuyer message: ${text}`,
   });
   const acc: ToolAcc = { products: [], hintedSkus: [] };
 
+  const model = process.env.OPENAI_MODEL || "gpt-4o";
   for (let i = 0; i < 6; i++) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -359,7 +430,7 @@ If mandate expired, tell them to re-authorise a spend cap in Cart.`;
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        model,
         messages,
         tools: TOOLS,
         tool_choice: "auto",
