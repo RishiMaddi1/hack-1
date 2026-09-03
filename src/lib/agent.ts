@@ -111,24 +111,50 @@ function isRemoveIntent(text: string) {
 }
 
 /** Remove from the live cart — prefer cart lines over suggestion cards. */
+function looksLikeControllerToken(token: string): boolean {
+  const t = token.toLowerCase().replace(/[^a-z]/g, "");
+  if (t.length < 7) return false;
+  if (t.includes("keyboa") || t.includes("kayboa") || t.includes("keyboard")) return false;
+  if (t.includes("control") || t.includes("gamepad")) return true;
+  // Ordered letter overlap with "controller" (catches cotnroller / controllr)
+  const target = "controller";
+  let ti = 0;
+  for (const ch of t) {
+    const idx = target.indexOf(ch, ti);
+    if (idx >= 0) ti = idx + 1;
+  }
+  return ti >= 8;
+}
+
+function mentionsCategory(text: string, kind: "controller" | "keyboard" | "mouse" | "pad"): boolean {
+  const lower = text.toLowerCase();
+  if (kind === "controller") {
+    if (/game\s*pad/.test(lower)) return true;
+    return lower.split(/\s+/).some(looksLikeControllerToken);
+  }
+  if (kind === "keyboard") return /keyboa|kayboa|keyboard|\bkb\b/i.test(lower);
+  if (kind === "mouse") return /\bmouse\b|\bmice\b/i.test(lower) && !/pad|deskmat/i.test(lower);
+  return /\b(mouse\s*pads?|deskmat)\b/i.test(lower);
+}
+
 function resolveRemoveSku(sessionId: string, text: string, history: ChatTurn[]): string | undefined {
   const cart = cartAsNamed(sessionId);
   const lower = text.toLowerCase();
   const anyOne = /\b(any|one|a|an)\b/i.test(lower);
 
-  if (/\bcontrollers?\b/i.test(lower) || /\bgamepad\b/i.test(lower)) {
+  if (mentionsCategory(text, "controller")) {
     const hit = cart.find(isController);
     if (hit) return hit.sku;
   }
-  if (/\bkeyboa|kayboa|keyboard|\bkb\b/i.test(lower)) {
+  if (mentionsCategory(text, "keyboard")) {
     const hit = cart.find(isKeyboard);
     if (hit) return hit.sku;
   }
-  if (/\bmouse\b|\bmice\b/i.test(lower) && !/pad|deskmat/i.test(lower)) {
+  if (mentionsCategory(text, "mouse")) {
     const hit = cart.find(isMouse);
     if (hit) return hit.sku;
   }
-  if (/\b(mouse\s*pads?|deskmat)\b/i.test(lower)) {
+  if (mentionsCategory(text, "pad")) {
     const hit = cart.find(isPad);
     if (hit) return hit.sku;
   }
@@ -144,6 +170,7 @@ function resolveRemoveSku(sessionId: string, text: string, history: ChatTurn[]):
     return priced[0]?.sku;
   }
 
+  // Only resolve against the live bag + shown cards — never invent a catalog SKU to "remove"
   return findSkuInText(text, [...cart, ...shownFromContext(sessionId, history)]);
 }
 
@@ -322,8 +349,9 @@ export async function runBuyerAgent(
 
   // Removals first — must beat suggestion-add heuristics and OpenAI.
   if (isRemoveIntent(raw)) {
+    const beforeSkus = new Set(getCart(sessionId).map((l) => l.sku));
     const sku = resolveRemoveSku(sessionId, raw, history);
-    if (sku) {
+    if (sku && beforeSkus.has(sku)) {
       mutateCart(sessionId, "remove", sku);
       const priced = priceCart(getCart(sessionId));
       return {
