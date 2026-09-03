@@ -97,7 +97,12 @@ export async function POST(request: Request) {
       },
     });
   }
-  const qty = Math.min(20, Math.max(1, Math.floor(Number(body.qty) || 1)));
+  const qtyRaw = Number(body.qty);
+  // Allow 0 on "set" so UI minus from 1 removes the line. Other actions keep qty ≥ 1.
+  const qty =
+    body.action === "set"
+      ? Math.min(20, Math.max(0, Math.floor(Number.isFinite(qtyRaw) ? qtyRaw : 0)))
+      : Math.min(20, Math.max(1, Math.floor(Number.isFinite(qtyRaw) ? qtyRaw : 1) || 1));
   const cart = mutateCart(sessionId, body.action, body.sku, qty);
   const mandate = getMandateForSession(sessionId);
   return NextResponse.json({ cart, priced: priceCart(cart), mandate });

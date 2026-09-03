@@ -50,6 +50,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "remove_from_cart",
+      description:
+        "Remove a SKU that is already in the cart. Call get_cart first if unsure which controller/keyboard/mouse line to drop. Never call add_to_cart when the buyer asked to remove.",
       parameters: {
         type: "object",
         properties: { sku: { type: "string" } },
@@ -62,7 +64,7 @@ const TOOLS = [
     function: {
       name: "get_cart",
       description:
-        "Show what is currently in the shopper's bag (lines, qty, payable). Call whenever they ask what's in cart / bag / basket.",
+        "Show what is currently in the shopper's bag (lines, qty, payable). Call whenever they ask what's in cart / bag / basket, or before removing a vague item.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -301,6 +303,7 @@ If they want an Obsidian monitor or a chair over remaining budget, say so and do
 The UI already renders product cards. Your text is 1–2 short sentences. No markdown, no **stars**, no Price/Short lists.
 Always mention a same-category step-up (costlier SKU in the same lane) when the tool returns upgrade — use price tokens. Only mention a different-category add-on when upgrade is cross-category (already at the top of the lane). Also mention one pair-with item when returned.
 When they ask what's in the cart / bag / basket, call get_cart so the UI can show the lines.
+When they ask to remove / drop / delete an item (including typos like “remeve” / “cotnroller”), call get_cart if needed then remove_from_cart with that cart SKU. Never add_to_cart on a remove request. “Any one controller” means remove one controller line already in the bag.
 When they ask about deals, offers, discounts, or sales, call list_offers and mention the live campaign in plain words.
 When they say add the 1st/2nd/3rd suggested item, “the upgrade”, “the step up”, “the suggested mouse/pad”, use chat history + LAST SUGGESTIONS — call add_to_cart with those exact SKUs (can call multiple times), then get_cart. Do not ask which one if the ordinal is clear. Typos like kayboard/art/shwo still mean keyboard/cart/show.
 When they want to pay / checkout / settle / buy the cart, you MUST call quote_checkout with NO arguments. Do not tell them to click a Checkout button. Never pass amount/price fields.

@@ -91,6 +91,62 @@ function isKeyboard(p: NamedSku) {
   return productCategory(p.sku) === "keyboard";
 }
 
+function isController(p: NamedSku) {
+  return productCategory(p.sku) === "controller";
+}
+
+function cartAsNamed(sessionId: string): NamedSku[] {
+  return getCart(sessionId)
+    .map((l) => {
+      const p = getProduct(l.sku);
+      return p ? { sku: p.sku, name: p.name } : null;
+    })
+    .filter((x): x is NamedSku => Boolean(x));
+}
+
+function isRemoveIntent(text: string) {
+  return /\b(remove|drop|delete|take\s+out|get\s+rid|clear\s+(the\s+)?(item|line)|without)\b/i.test(
+    text,
+  );
+}
+
+/** Remove from the live cart — prefer cart lines over suggestion cards. */
+function resolveRemoveSku(sessionId: string, text: string, history: ChatTurn[]): string | undefined {
+  const cart = cartAsNamed(sessionId);
+  const lower = text.toLowerCase();
+  const anyOne = /\b(any|one|a|an)\b/i.test(lower);
+
+  if (/\bcontrollers?\b/i.test(lower) || /\bgamepad\b/i.test(lower)) {
+    const hit = cart.find(isController);
+    if (hit) return hit.sku;
+  }
+  if (/\bkeyboa|kayboa|keyboard|\bkb\b/i.test(lower)) {
+    const hit = cart.find(isKeyboard);
+    if (hit) return hit.sku;
+  }
+  if (/\bmouse\b|\bmice\b/i.test(lower) && !/pad|deskmat/i.test(lower)) {
+    const hit = cart.find(isMouse);
+    if (hit) return hit.sku;
+  }
+  if (/\b(mouse\s*pads?|deskmat)\b/i.test(lower)) {
+    const hit = cart.find(isPad);
+    if (hit) return hit.sku;
+  }
+
+  const fromCart = bestInPool(cart, text);
+  if (fromCart) return fromCart;
+
+  // “remove any one” / vague — drop the most expensive cart line
+  if (anyOne && cart.length) {
+    const priced = [...cart].sort(
+      (a, b) => (getProduct(b.sku)?.pricePaise || 0) - (getProduct(a.sku)?.pricePaise || 0),
+    );
+    return priced[0]?.sku;
+  }
+
+  return findSkuInText(text, [...cart, ...shownFromContext(sessionId, history)]);
+}
+
 /** Score how well buyer text points at a known product name/sku (no hardcoded SKUs). */
 function nameMatchScore(item: NamedSku, text: string): number {
   const hay = norm(`${item.name} ${item.sku}`);
@@ -182,7 +238,12 @@ function skusFromSuggestionSpeech(
   history: ChatTurn[],
 ): string[] {
   const lower = text.toLowerCase();
-  const wantsAdd = /\b(add|put|take|cart|bag|art)\b/i.test(lower);
+  // Never treat remove / drop speech as an add — “from my bag” used to match wantsAdd via “bag”.
+  if (isRemoveIntent(lower)) return [];
+  const wantsAdd =
+    /\b(add|put)\b/i.test(lower) ||
+    /\b(add|put|take)\b.*\b(cart|bag)\b/i.test(lower) ||
+    /\b(cart|bag)\b.*\b(add|put)\b/i.test(lower);
   if (!wantsAdd) return [];
 
   const pool = shownFromContext(sessionId, history);
@@ -258,6 +319,34 @@ export async function runBuyerAgent(
     reason: `Buyer said: ${raw.slice(0, 180)}`,
     data: { text: raw, historyTurns: history.length },
   });
+
+  // Removals first — must beat suggestion-add heuristics and OpenAI.
+  if (isRemoveIntent(raw)) {
+    const sku = resolveRemoveSku(sessionId, raw, history);
+    if (sku) {
+      mutateCart(sessionId, "remove", sku);
+      const priced = priceCart(getCart(sessionId));
+      return {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: `Removed ${getProduct(sku)?.name}. Bag is ${formatInr(priced.payablePaise)}.`,
+        showCart: true,
+        products: priced.lines
+          .map((l) => getProduct(l.sku))
+          .filter(Boolean)
+          .map((p) => toCard(p!)),
+      };
+    }
+    const cart = getCart(sessionId);
+    return {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      text: cart.length
+        ? `Which line? In bag: ${cart.map((l) => getProduct(l.sku)?.name || l.sku).join(", ")}.`
+        : "Bag is empty — nothing to remove.",
+      showCart: true,
+    };
+  }
 
   // Deterministic: “add 2nd suggested keyboard + mouse then show cart”
   const fromSuggest = skusFromSuggestionSpeech(sessionId, raw, history);
@@ -408,12 +497,13 @@ export async function runBuyerAgent(
   }
 
   if (/remove |drop |delete /.test(lower)) {
-    const sku = findSkuInText(raw, shownFromContext(sessionId, history));
+    const sku = resolveRemoveSku(sessionId, raw, history);
     if (sku) mutateCart(sessionId, "remove", sku);
     return {
       id: crypto.randomUUID(),
       role: "assistant",
-      text: sku ? `Removed ${getProduct(sku)?.name}.` : "Tell me which SKU to remove.",
+      text: sku ? `Removed ${getProduct(sku)?.name}.` : "Tell me which item in the bag to remove.",
+      showCart: true,
     };
   }
 
