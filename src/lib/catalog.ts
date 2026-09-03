@@ -719,17 +719,6 @@ export function searchCatalog(query: string, budgetPaise?: number): Product[] {
       }
     }
     if (budgetPaise && p.pricePaise > budgetPaise) score -= 2;
-    if (/keyboard|hive|swarm|mechanical/.test(q) && p.category === "keyboard") score += 4;
-    if (/\bmouse\b|harpy|anzu|chimera|dpi/.test(q) && !/pad|deskmat/.test(q) && p.category === "mouse")
-      score += 4;
-    if (/light|ultralight|weight/.test(q) && p.category === "mouse") {
-      if (/ultralight|48g|49g|55g|lightweight/.test(hay)) score += 5;
-    }
-    if (/monitor|obsidian|1440|hz/.test(q) && p.category === "monitor") score += 4;
-    if (/headphone|headset|mic|kast|sonik|beluga/.test(q) && p.category === "audio") score += 4;
-    if (/controller|gamepad|surge|mirage/.test(q) && p.category === "controller") score += 4;
-    if (/(mouse\s*pad|deskmat|\bpad\b|webcam|cooler|chair)/.test(q) && p.category === "accessory")
-      score += 4;
     return { p, score };
   })
     .filter((x) => x.score > 0)

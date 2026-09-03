@@ -46,7 +46,7 @@ export function formatSuggestContext(sessionId: string): string {
     lines.push(`Pair ${i + 1}: sku=${p.sku} name=${p.name}`);
   });
   lines.push(
-    "If they say “add that Hive98 / the suggested mouse”, use the matching row’s exact sku with add_to_cart (multiple ok), then get_cart.",
+    "If they point at a shown name / ordinal / “the upgrade”, use that row’s exact sku with add_to_cart (multiple ok), then get_cart.",
   );
   return lines.join("\n");
 }

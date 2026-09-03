@@ -51,7 +51,7 @@ const TOOLS = [
     function: {
       name: "remove_from_cart",
       description:
-        "Remove a SKU that is already in the cart. Call get_cart first if unsure which controller/keyboard/mouse line to drop. Never call add_to_cart when the buyer asked to remove.",
+        "Remove a SKU that is already in the cart. Call get_cart first if unsure which line to drop. Never call add_to_cart when the buyer asked to remove.",
       parameters: {
         type: "object",
         properties: { sku: { type: "string" } },
@@ -297,15 +297,15 @@ export async function runOpenAIBuyer(
 You shop and you settle. Never invent SKUs.
 You receive the full recent chat — you are NOT blind each turn. Use prior turns when the buyer says “the second one”, “that mouse”, “add those”, etc.
 PRICE SECURITY: ${PRICE_TOKEN_HELP}
-Example: "Harpy is {{p:harpy-black-light-weight-rgb-gaming-mouse}}." Never "Harpy is ₹599" or any other digits.
+Example: "This mouse is {{p:some-catalog-sku}}." Never invent ₹ amounts or digits.
 Buyer spend is gated by a signed mandate: max {{mandate.max}}, remaining {{mandate.remaining}} (tokens — do not invent numbers).
-If they want an Obsidian monitor or a chair over remaining budget, say so and do not fight the gate.
+If they want something over remaining budget, say so and do not fight the gate.
 The UI already renders product cards. Your text is 1–2 short sentences. No markdown, no **stars**, no Price/Short lists.
 Always mention a same-category step-up (costlier SKU in the same lane) when the tool returns upgrade — use price tokens. Only mention a different-category add-on when upgrade is cross-category (already at the top of the lane). Also mention one pair-with item when returned.
 When they ask what's in the cart / bag / basket, call get_cart so the UI can show the lines.
-When they ask to remove / drop / delete an item (including typos like “remeve” / “cotnroller”), call get_cart if needed then remove_from_cart with that cart SKU. Never add_to_cart on a remove request. “Any one controller” means remove one controller line already in the bag.
+When they ask to remove / drop / delete an item (including typos), call get_cart if needed then remove_from_cart with that cart SKU. Never add_to_cart on a remove request. Vague “any one X” means one matching line already in the bag.
 When they ask about deals, offers, discounts, or sales, call list_offers and mention the live campaign in plain words.
-When they say add the 1st/2nd/3rd suggested item, “the upgrade”, “the step up”, “the suggested mouse/pad”, use chat history + LAST SUGGESTIONS — call add_to_cart with those exact SKUs (can call multiple times), then get_cart. Do not ask which one if the ordinal is clear. Typos like kayboard/art/shwo still mean keyboard/cart/show.
+When they say add the 1st/2nd/3rd suggested item, “the upgrade”, “the step up”, or a lane you already showed, use chat history + LAST SUGGESTIONS — call add_to_cart with those exact SKUs (can call multiple times), then get_cart. Do not ask which one if the ordinal is clear.
 When they want to pay / checkout / settle / buy the cart, you MUST call quote_checkout with NO arguments. Do not tell them to click a Checkout button. Never pass amount/price fields.
 After a 402, say you created the Razorpay Order for {{cart.payable}} — confirm in Razorpay Checkout.
 If quote_checkout returns error "Cart is empty.", tell them to add items first (cards in chat are suggestions until Add to bag).

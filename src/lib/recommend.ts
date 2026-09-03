@@ -80,7 +80,7 @@ export function pickUpgrade(
   if (sameCat[0]) return sameCat[0].p;
 
   // Truly no costlier SKU in this lane under the mandate → other category only if
-  // matches already include the costliest keyboard/mouse/etc. that fits remaining.
+  // matches already include the costliest same-category SKU that fits remaining.
   const costliestInMandate = PRODUCTS.filter(
     (p) => p.category === cat && shelfPricePaise(p) <= remainingPaise,
   ).sort((a, b) => shelfPricePaise(b) - shelfPricePaise(a))[0];
@@ -94,48 +94,89 @@ export function pickUpgrade(
   return pickCrossCategoryAddon(cat, takenSkus, remainingPaise);
 }
 
+/**
+ * Companions declared in catalog data: targets of upsellSku from products in `fromCat`
+ * (cross-category only). Frequency-ranked — no lane name tables.
+ */
+function companionsFromCatalogLinks(fromCat: Product["category"]): Product[] {
+  const counts = new Map<string, number>();
+  for (const p of PRODUCTS) {
+    if (p.category !== fromCat || !p.upsellSku) continue;
+    const t = getProduct(p.upsellSku);
+    if (!t || t.category === fromCat) continue;
+    counts.set(t.sku, (counts.get(t.sku) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([sku]) => getProduct(sku)!)
+    .filter(Boolean);
+}
+
+/**
+ * Different-category companion from catalog links only (upsellSku graph).
+ * Never falls back to “cheapest random SKU” (that surfaced junk keychains).
+ */
+function otherCategoryUnderBudget(
+  fromCat: Product["category"],
+  takenSkus: Set<string>,
+  remainingPaise: number,
+  preferSku?: string,
+): Product | undefined {
+  const fits = (p?: Product) =>
+    Boolean(
+      p &&
+        p.category !== fromCat &&
+        !takenSkus.has(p.sku) &&
+        shelfPricePaise(p) <= remainingPaise,
+    );
+
+  if (preferSku) {
+    const linked = getProduct(preferSku);
+    if (fits(linked)) return linked;
+  }
+
+  for (const p of companionsFromCatalogLinks(fromCat)) {
+    if (fits(p)) return p;
+  }
+
+  // Chain: follow upsellSku of something already chosen (seed / first pair)
+  for (const sku of takenSkus) {
+    const cur = getProduct(sku);
+    if (!cur?.upsellSku) continue;
+    const next = getProduct(cur.upsellSku);
+    if (fits(next)) return next;
+  }
+
+  return undefined;
+}
+
 /** Different-category add-on used only when same-lane step-up is exhausted. */
 function pickCrossCategoryAddon(
   cat: Product["category"],
   takenSkus: Set<string>,
   remainingPaise: number,
 ): Product | undefined {
-  const candidates: Product[] = [];
-  const add = (p?: Product) => {
-    if (!p || takenSkus.has(p.sku) || p.pricePaise > remainingPaise) return;
-    if (p.category === cat) return;
-    candidates.push(p);
-  };
-  if (cat === "controller") {
-    add(PRODUCTS.find((p) => p.category === "mouse" && p.pricePaise <= remainingPaise));
-  } else if (cat === "mouse") {
-    add(PRODUCTS.find((p) => /mousepad|deskmat/i.test(p.name) && p.pricePaise <= remainingPaise));
-    add(PRODUCTS.find((p) => p.category === "keyboard" && p.pricePaise <= remainingPaise));
-  } else if (cat === "keyboard") {
-    add(PRODUCTS.find((p) => p.category === "mouse" && p.pricePaise <= remainingPaise));
-  } else if (cat === "audio") {
-    add(PRODUCTS.find((p) => /boom arm|shock mount/i.test(p.name) && p.pricePaise <= remainingPaise));
-  }
-  candidates.sort((a, b) => a.pricePaise - b.pricePaise);
-  return candidates[0];
+  return otherCategoryUnderBudget(cat, takenSkus, remainingPaise);
 }
 
 export function pickPairs(matches: Product[], remainingPaise: number, cartSkus: Set<string>): Product[] {
   const pairs: Product[] = [];
+  const taken = new Set([...cartSkus, ...matches.map((m) => m.sku)]);
   const add = (p?: Product) => {
-    if (!p || cartSkus.has(p.sku) || p.pricePaise > remainingPaise) return;
-    if (pairs.some((x) => x.sku === p.sku) || matches.some((m) => m.sku === p.sku)) return;
+    if (!p || taken.has(p.sku) || shelfPricePaise(p) > remainingPaise) return;
+    if (pairs.some((x) => x.sku === p.sku)) return;
     pairs.push(p);
+    taken.add(p.sku);
   };
-  const cat = matches[0]?.category;
-  // Pairs = different category companions (not the step-up).
-  if (cat === "mouse" || cat === "keyboard") {
-    add(PRODUCTS.find((p) => /mousepad|deskmat/i.test(p.name) && p.pricePaise <= remainingPaise));
+  const seed = matches[0];
+  if (!seed) return pairs;
+  // 1) Seed's declared companion
+  add(otherCategoryUnderBudget(seed.category, taken, remainingPaise, seed.upsellSku));
+  // 2) Next link in catalog graph (e.g. mouse → pad), or another popular companion for the lane
+  if (pairs[0]?.upsellSku) {
+    add(otherCategoryUnderBudget(seed.category, taken, remainingPaise, pairs[0].upsellSku));
   }
-  if (cat === "mouse") add(PRODUCTS.find((p) => p.category === "keyboard" && p.pricePaise <= remainingPaise));
-  if (cat === "keyboard") add(PRODUCTS.find((p) => p.category === "mouse" && p.pricePaise <= remainingPaise));
-  if (cat === "controller") add(PRODUCTS.find((p) => p.category === "mouse" && p.pricePaise <= remainingPaise));
-  if (cat === "audio") add(PRODUCTS.find((p) => /boom arm|shock mount/i.test(p.name) && p.pricePaise <= remainingPaise));
+  add(otherCategoryUnderBudget(seed.category, taken, remainingPaise));
   return pairs.slice(0, 2);
 }
 

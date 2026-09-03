@@ -274,7 +274,7 @@ export function CartDrawer() {
           </div>
           <p className="mt-2 text-xs text-muted">
             You set this spend mandate — not Razorpay. The agent cannot create an Order above it (same idea as a UPI
-            Circle limit). Default is ₹8,000 so a keyboard and mouse fit; a monitor does not.
+            Circle limit). Default is ₹8,000 so a few mid-range items fit; a high-ticket SKU may not.
           </p>
           <div className="mt-2 flex gap-2">
             {[

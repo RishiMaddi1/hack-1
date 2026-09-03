@@ -31,7 +31,7 @@ export type SessionState = {
   budgetSet?: boolean;
   /** Last cart mutation — for abandoned-cart cron */
   cartTouchedAt?: string;
-  /** Last cards shown in buyer agent — for “add the 2nd keyboard / the mouse”. */
+  /** Last cards shown in buyer agent — for “add the 2nd / that one”. */
   lastSuggest?: {
     products: SessionSuggestItem[];
     upsell?: SessionSuggestItem;

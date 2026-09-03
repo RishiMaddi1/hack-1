@@ -26,6 +26,9 @@ const STOP = new Set([
   "you", "suggested", "suggest", "sggest", "suger", "sugget", "and", "to", "please", "a",
   "an", "of", "for", "with", "me", "into", "in", "your", "show", "get", "want", "wanna",
   "like", "just", "both", "as", "well", "can", "could", "would", "buy", "order",
+  // ordinal / filler — must not drive catalog search (“first one” ≠ Beluga)
+  "first", "second", "third", "1st", "2nd", "3rd", "one", "two", "three",
+  "earlier", "before", "again", "those", "these", "them", "it", "ones",
 ]);
 
 function extractBudget(text: string): number | undefined {
@@ -79,16 +82,17 @@ function productCategory(sku: string) {
 
 function isPad(p: NamedSku) {
   const prod = getProduct(p.sku);
-  if (prod?.category !== "accessory") return false;
-  return /mouse\s*pad|deskmat|pad/i.test(`${p.name} ${p.sku}`);
+  if (!prod) return false;
+  // From catalog fields only — not a brand word list
+  const hay = `${prod.name} ${prod.tags.join(" ")}`.toLowerCase();
+  return prod.category === "accessory" && /pad|deskmat|mat/.test(hay);
 }
 
-function isMouse(p: NamedSku) {
-  return productCategory(p.sku) === "mouse";
-}
-
-function isKeyboard(p: NamedSku) {
-  return productCategory(p.sku) === "keyboard";
+/** Categories implied by buyer text via catalog search (JSON), not regex lane tables. */
+function categoriesFromUtterance(text: string): Set<string> {
+  const q = searchQueryFromAdd(text) || removeSearchQuery(text);
+  if (!q) return new Set();
+  return new Set(searchCatalog(q).slice(0, 6).map((p) => p.category));
 }
 
 function cartAsNamed(sessionId: string): NamedSku[] {
@@ -258,8 +262,8 @@ function nameMatchScore(item: NamedSku, text: string): number {
   for (const t of queryTokens(text)) {
     if (hay.includes(t) || hayCompact.includes(t)) score += t.length >= 4 ? 2 : 1;
   }
-  // “mouse” must not win on “Mousepad”
-  if (/\bmouse\b/.test(utter) && isPad(item) && !/pad|deskmat/.test(utter)) score -= 20;
+  // “mouse” must not win on a pad/deskmat line from catalog tags
+  if (/\bmouse\b/.test(utter) && isPad(item) && !/pad|deskmat|mat/.test(utter)) score -= 20;
   return score;
 }
 
@@ -315,7 +319,7 @@ function ordinalIndex(text: string): number | null {
 
 /**
  * Resolve add intents from what we already showed + catalog search.
- * History card SKUs / lastSuggest are the source of truth — not alias tables.
+ * History card SKUs / lastSuggest + searchCatalog categories — not brand/lane alias tables.
  */
 function skusFromSuggestionSpeech(
   sessionId: string,
@@ -339,14 +343,19 @@ function skusFromSuggestionSpeech(
   };
 
   const ord = ordinalIndex(lower);
-  const wantsKeyboard = /keyboa|kayboa|keyboard|\bkb\b/i.test(lower);
-  const wantsMouse = /\bmouse\b|\bmice\b/i.test(lower);
-  const wantsPad = /\b(mouse\s*pads?|deskmat)\b/i.test(lower);
   const wantsUpgrade = /upgrade|step\s*up|costlier/i.test(lower);
+  const cats = categoriesFromUtterance(text);
 
   if (ord != null && last) {
-    const lane = wantsKeyboard ? last.products.filter(isKeyboard) : last.products;
+    const lane =
+      cats.size > 0
+        ? last.products.filter((p) => cats.has(productCategory(p.sku) || ""))
+        : last.products;
     push((lane[ord] || last.products[ord])?.sku);
+    // Pure “add the 1st / first one” — do not also fuzzy-dump pairs from the card pool
+    if (!cats.size && !wantsUpgrade && !searchQueryFromAdd(text)) {
+      return skus;
+    }
   }
 
   if (wantsUpgrade && last?.upsell) push(last.upsell.sku);
@@ -355,33 +364,28 @@ function skusFromSuggestionSpeech(
   const namedFromShown = bestInPool(pool, text);
   if (namedFromShown) push(namedFromShown);
 
-  // Lane intents (“the keyboard / mouse / pad you suggested”)
-  if (wantsKeyboard && !skus.some((s) => productCategory(s) === "keyboard")) {
-    push(
-      bestInPool(pool, text, isKeyboard) ||
-        (last?.upsell && isKeyboard(last.upsell) ? last.upsell.sku : undefined),
-    );
-  }
-  if (wantsMouse && !skus.some((s) => productCategory(s) === "mouse")) {
-    push(bestInPool(pool, text, isMouse) || pool.find(isMouse)?.sku);
-  }
-  if (wantsPad && !skus.some((s) => isPad({ sku: s, name: getProduct(s)?.name || "" }))) {
-    push(bestInPool(pool, text, isPad) || pool.find(isPad)?.sku);
+  // Lane from catalog categories implied by the utterance
+  for (const cat of cats) {
+    if (skus.some((s) => productCategory(s) === cat)) continue;
+    const inPool = pool.filter((p) => productCategory(p.sku) === cat);
+    push(bestInPool(inPool, text) || inPool[0]?.sku);
+    if (last?.upsell && productCategory(last.upsell.sku) === cat) push(last.upsell.sku);
   }
 
-  // Still missing → catalog search on leftover tokens (still no SKU hardcoding)
-  const needKeyboard = wantsKeyboard && !skus.some((s) => productCategory(s) === "keyboard");
-  const needMouse = wantsMouse && !skus.some((s) => productCategory(s) === "mouse");
-  const needPad =
-    wantsPad && !skus.some((s) => isPad({ sku: s, name: getProduct(s)?.name || "" }));
-  if (!skus.length || needKeyboard || needMouse || needPad) {
+  // Still missing → catalog search on leftover tokens
+  if (!skus.length || [...cats].some((cat) => !skus.some((s) => productCategory(s) === cat))) {
     const q = searchQueryFromAdd(text);
     if (q) {
-      const hits = searchCatalog(q).map((p) => ({ sku: p.sku, name: p.name }));
-      if (needKeyboard) push(bestInPool(hits, text, isKeyboard) || hits.find(isKeyboard)?.sku);
-      if (needMouse) push(bestInPool(hits, text, isMouse) || hits.find(isMouse)?.sku);
-      if (needPad) push(bestInPool(hits, text, isPad) || hits.find(isPad)?.sku);
-      if (!skus.length) push(bestInPool(hits, text) || hits[0]?.sku);
+      const hits = searchCatalog(q);
+      for (const cat of cats) {
+        if (skus.some((s) => productCategory(s) === cat)) continue;
+        const lane = hits.filter((p) => p.category === cat).map((p) => ({ sku: p.sku, name: p.name }));
+        push(bestInPool(lane, text) || lane[0]?.sku);
+      }
+      if (!skus.length) {
+        const asNamed = hits.map((p) => ({ sku: p.sku, name: p.name }));
+        push(bestInPool(asNamed, text) || hits[0]?.sku);
+      }
     }
   }
 
@@ -479,7 +483,7 @@ export async function runBuyerAgent(
       return {
         id: crypto.randomUUID(),
         role: "assistant",
-        text: "Bag is empty. Name a mouse, keyboard, or pad and I’ll add it.",
+        text: "Bag is empty. Name something from the catalog and I’ll add it.",
       };
     }
     const hasDeal = priced.discountPaise > 0;

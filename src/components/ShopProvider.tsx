@@ -19,7 +19,7 @@ import { ShopperGate, clearStoredShopper, persistShopper, readStoredShopper, typ
 const HELLO_MESSAGE: ChatMessage = {
   id: "hello",
   role: "assistant",
-  text: "Tell me the desk — mouse, keyboard, pad — and I’ll search and add. Ask what’s in the bag or about offers anytime. Type pay when you’re ready to quote Razorpay.",
+  text: "Tell me what you need from the catalog and I’ll search and add. Ask what’s in the bag or about offers anytime. Type pay when you’re ready to quote Razorpay.",
 };
 
 export type Priced = {
