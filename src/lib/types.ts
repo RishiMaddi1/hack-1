@@ -85,6 +85,8 @@ export type CheckoutRecord = {
   campaignId?: string;
   orderId?: string;
   paymentId?: string;
+  /** Bearer for /pay confirm — never expose sessionId on the public pay API. */
+  payToken?: string;
   explanation: string;
   lines: Array<{ sku: string; name: string; qty: number; unitPaise: number; linePaise: number }>;
   stopRule?: string;

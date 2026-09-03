@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { ProductCard } from "@/components/ProductCard";
 import { ChatText } from "@/components/ChatText";
 import { useShop } from "@/components/ShopProvider";
@@ -203,6 +204,7 @@ function PaidReceiptCard({
 }
 
 export function CartDrawer() {
+  const pathname = usePathname();
   const {
     cartOpen,
     setCartOpen,
@@ -214,6 +216,7 @@ export function CartDrawer() {
     notice,
     send,
   } = useShop();
+  if (pathname.startsWith("/pay")) return null;
   if (!cartOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-fg/30">
@@ -315,6 +318,7 @@ export function CartDrawer() {
 }
 
 export function AskDrawer() {
+  const pathname = usePathname();
   const {
     askOpen,
     setAskOpen,
@@ -332,6 +336,7 @@ export function AskDrawer() {
     notice,
     priced,
   } = useShop();
+  if (pathname.startsWith("/pay")) return null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const replyStartRef = useRef<HTMLDivElement>(null);
   const prevLen = useRef(0);

@@ -68,12 +68,12 @@ function softReason(reason: string): string {
 }
 
 const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "all", label: "All logs" },
   { id: "adds", label: "Cart adds" },
   { id: "paid", label: "Paid" },
   { id: "failed", label: "Failed" },
   { id: "open", label: "Open quotes" },
   { id: "abandoned", label: "Left carts" },
-  { id: "all", label: "All logs" },
 ];
 
 export default function AuditPage() {
@@ -88,7 +88,7 @@ export default function AuditPage() {
     aovWithUpsell: number;
     liftPaise: number;
   } | null>(null);
-  const [tab, setTab] = useState<Tab>("adds");
+  const [tab, setTab] = useState<Tab>("all");
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -138,7 +138,10 @@ export default function AuditPage() {
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
           <Stat label="Avg without upsell" value={formatInr(growth.aovWithoutUpsell)} />
           <Stat label="Avg with upsell" value={formatInr(growth.aovWithUpsell)} />
-          <Stat label="Lift" value={formatInr(growth.liftPaise)} />
+          <Stat
+            label="Lift (with − without)"
+            value={formatInr(growth.liftPaise)}
+          />
         </div>
       ) : null}
 
@@ -177,7 +180,7 @@ export default function AuditPage() {
         ))}
       </div>
 
-      <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+      <div className="mt-6 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         <section>
           {tab === "adds" && (
             <ul className="space-y-2">
@@ -257,14 +260,14 @@ export default function AuditPage() {
           )}
         </section>
 
-        <section className="border border-line bg-card">
+        <section className="w-full self-start border border-line bg-card lg:sticky lg:top-20">
           <div className="border-b border-line px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-wide text-muted">Session log</p>
             <p className="mt-1 font-mono text-sm text-fg">
               {sessionId || "Click a payment, quote, or cart to inspect"}
             </p>
           </div>
-          <div className="max-h-[36rem] space-y-3 overflow-y-auto p-4">
+          <div className="max-h-[min(36rem,70vh)] space-y-3 overflow-y-auto p-4">
             {!sessionId ? (
               <p className="text-sm text-muted">
                 Full event trail for one shopper session appears here — adds, quotes, captures,

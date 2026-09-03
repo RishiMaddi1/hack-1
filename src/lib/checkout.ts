@@ -3,7 +3,8 @@ import { spendCampaign } from "./campaigns";
 import { id } from "./ids";
 import { getMandateForSession, mutateCart } from "./cart";
 import { explainMoney, priceCart } from "./quote";
-import { createRazorpayOrder, createPaymentLink, fetchPayment, hasLiveTestKeys, getKeyId, verifyPaymentSignature } from "./razorpay";
+import { createRazorpayOrder, fetchPayment, hasLiveTestKeys, getKeyId, verifyPaymentSignature } from "./razorpay";
+import { circuitPayUrl } from "./public-origin";
 import { getDb, getOrCreateSession, saveDb } from "./store";
 import { issueMandate } from "./mandate-signer";
 import { buildNegotiate } from "./negotiate";
@@ -146,14 +147,6 @@ export async function quoteCheckout(sessionId: string): Promise<
     return { status: 400, body: { error: `Razorpay Order failed: ${msg.slice(0, 160)}` } };
   }
 
-  const paymentLink = await createPaymentLink({
-    amountPaise: priced.payablePaise,
-    checkoutId,
-    orderId: order.orderId,
-    sessionId,
-    description: explanation.slice(0, 200),
-  });
-
   const record: CheckoutRecord = {
     id: checkoutId,
     sessionId,
@@ -163,6 +156,7 @@ export async function quoteCheckout(sessionId: string): Promise<
     discountPaise: priced.discountPaise,
     campaignId: priced.campaignId,
     orderId: order.orderId,
+    payToken: id("ptk"),
     explanation,
     lines: priced.lines,
     createdAt: new Date().toISOString(),
@@ -171,7 +165,8 @@ export async function quoteCheckout(sessionId: string): Promise<
   const db = getDb();
   db.checkouts[checkoutId] = record;
   session.lastCheckoutId = checkoutId;
-  const linkUrl = paymentLink.url || undefined;
+  // Circuit-hosted Checkout.js page (avoids Razorpay test Payment Link cap of 30).
+  const linkUrl = circuitPayUrl(order.orderId);
   const quote: U402Quote = {
     u402Version: 1,
     error: "payment_required",
@@ -202,9 +197,7 @@ export async function quoteCheckout(sessionId: string): Promise<
       campaignId: priced.campaignId,
       campaignName: priced.campaignName,
       lines: priced.lines,
-      explanation: paymentLink.error
-        ? `${explanation} ${paymentLink.error}`
-        : explanation,
+      explanation,
     },
   };
   session.lastQuote = quote;
@@ -224,15 +217,13 @@ export async function confirmCheckout(opts: {
   if (!record || record.sessionId !== opts.sessionId) {
     return { status: 404 as const, body: { error: "Unknown checkout." } };
   }
+  if (record.orderId && record.orderId !== opts.orderId) {
+    return { status: 400 as const, body: { error: "orderId does not match checkout." } };
+  }
   if (record.status === "paid") {
     return { status: 200 as const, body: { ok: true, record, idempotent: true } };
   }
-  if (record.status === "failed") {
-    return {
-      status: 409 as const,
-      body: { error: "This checkout already failed. Stop rule: no retry on the same checkout_id." },
-    };
-  }
+  // status "failed" is still capturable if Razorpay signature verifies (pay-again / late success).
 
   const signed = verifyPaymentSignature({
     orderId: opts.orderId,
@@ -264,8 +255,57 @@ export async function confirmCheckout(opts: {
     return failCheckout(opts.sessionId, opts.checkoutId, "Razorpay marked payment failed.");
   }
 
+  const paidAmount = Number((payment as { amount?: number }).amount);
+  if (Number.isFinite(paidAmount) && paidAmount > 0 && paidAmount !== again.amountPaise) {
+    return {
+      status: 400 as const,
+      body: { error: "Payment amount does not match checkout." },
+    };
+  }
+
   applyCapture(again, opts.paymentId, opts.orderId, "client");
   return { status: 200 as const, body: { ok: true, record: again } };
+}
+
+export function findCheckoutByOrderId(orderId: string): CheckoutRecord | undefined {
+  return Object.values(getDb().checkouts).find((c) => c.orderId === orderId);
+}
+
+/** Public /pay handoff — capture or soft-dismiss without trusting a client sessionId. */
+export async function confirmPayPage(opts: {
+  orderId: string;
+  payToken: string;
+  paymentId?: string;
+  signature?: string;
+  dismissed?: boolean;
+}) {
+  const record = findCheckoutByOrderId(opts.orderId);
+  if (!record?.orderId || !record.payToken) {
+    return { status: 404 as const, body: { error: "Unknown or expired order" } };
+  }
+  if (record.payToken !== opts.payToken) {
+    return { status: 403 as const, body: { error: "Invalid pay token" } };
+  }
+  if (opts.dismissed) {
+    return dismissCheckout(record.sessionId, record.id);
+  }
+  if (!opts.paymentId || !opts.signature) {
+    return { status: 400 as const, body: { error: "payment fields required" } };
+  }
+  return confirmCheckout({
+    sessionId: record.sessionId,
+    checkoutId: record.id,
+    orderId: record.orderId,
+    paymentId: opts.paymentId,
+    signature: opts.signature,
+  });
+}
+
+/** Soft age-out for handoff links (Razorpay order maxTimeoutSeconds ≈ 300). */
+export function isCheckoutPayExpired(record: CheckoutRecord, maxAgeMs = 30 * 60_000): boolean {
+  const created = Date.parse(record.createdAt);
+  if (!Number.isFinite(created)) return false;
+  return Date.now() - created > maxAgeMs;
 }
 
 /** Single writer for paid side-effects — client confirm and webhook both call this. */

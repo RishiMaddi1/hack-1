@@ -19,10 +19,22 @@ import { formatInr } from "../money";
 import { pRef, cartPayableRef, mandateRemainingRef, mandateMaxRef } from "../price-refs";
 import { getDb } from "../store";
 
-export type McpToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+export type McpToolResult = {
+  content: Array<{ type: "text"; text: string }>;
+  isError?: boolean;
+};
 
-function ok(data: unknown): McpToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+function ok(data: unknown, images?: Array<{ alt: string; url: string }>): McpToolResult {
+  const content: McpToolResult["content"] = [
+    { type: "text", text: JSON.stringify(data, null, 2) },
+  ];
+  if (images?.length) {
+    content.push({
+      type: "text",
+      text: images.map((i) => `![${i.alt}](${i.url})`).join("\n\n"),
+    });
+  }
+  return { content };
 }
 
 function err(message: string, extra?: Record<string, unknown>): McpToolResult {
@@ -83,7 +95,8 @@ export const MCP_TOOL_DEFS = [
   },
   {
     name: "search_catalog",
-    description: "Search catalog after register. Prices are server tokens — never invent ₹ amounts.",
+    description:
+      "Search catalog after register. Returns sku, name, price tokens, and image URLs for each match. Never invent ₹ amounts.",
     inputSchema: {
       type: "object",
       properties: {
@@ -216,16 +229,21 @@ export async function runMcpTool(name: string, args: Record<string, unknown>): P
       const budget =
         typeof args.budget_rupees === "number" ? args.budget_rupees * 100 : undefined;
       const hits = searchCatalog(query, budget).slice(0, 8);
-      return ok({
-        username: auth.username,
-        matches: hits.map((p) => ({
-          sku: p.sku,
-          name: p.name,
-          price: pRef(p.sku),
-          price_inr: formatInr(p.pricePaise),
-        })),
-        note: "Use sku with add_to_cart. Prefer price tokens in speech.",
-      });
+      const matches = hits.map((p) => ({
+        sku: p.sku,
+        name: p.name,
+        price: pRef(p.sku),
+        price_inr: formatInr(p.pricePaise),
+        image: p.image,
+      }));
+      return ok(
+        {
+          username: auth.username,
+          matches,
+          note: "Use sku with add_to_cart. Prefer price tokens in speech. Show image URLs to the human when helpful.",
+        },
+        matches.map((m) => ({ alt: m.name, url: m.image })),
+      );
     }
 
     if (name === "get_audit") {
@@ -244,30 +262,40 @@ export async function runMcpTool(name: string, args: Record<string, unknown>): P
     if (name === "get_cart") {
       const priced = priceCart(getCart(sessionId));
       const mandate = getMandateForSession(sessionId);
-      return ok({
-        username: auth.username,
-        lines: priced.lines.map((l) => ({
-          sku: l.sku,
-          name: l.name,
-          qty: l.qty,
-          price_inr: formatInr(l.linePaise),
-        })),
-        payable: cartPayableRef(),
-        payable_inr: formatInr(priced.payablePaise),
-        remaining_inr: formatInr(mandate.remainingPaise),
-      });
+      const lines = priced.lines.map((l) => ({
+        sku: l.sku,
+        name: l.name,
+        qty: l.qty,
+        price_inr: formatInr(l.linePaise),
+        image: getProduct(l.sku)?.image || null,
+      }));
+      return ok(
+        {
+          username: auth.username,
+          lines,
+          payable: cartPayableRef(),
+          payable_inr: formatInr(priced.payablePaise),
+          remaining_inr: formatInr(mandate.remainingPaise),
+        },
+        lines.filter((l) => l.image).map((l) => ({ alt: l.name, url: l.image as string })),
+      );
     }
     if (name === "add_to_cart") {
       const sku = String(args.sku || "");
-      if (!getProduct(sku)) return err(`Unknown SKU ${sku}`);
+      const product = getProduct(sku);
+      if (!product) return err(`Unknown SKU ${sku}`);
       mutateCart(sessionId, "add", sku, Number(args.qty) || 1);
       const priced = priceCart(getCart(sessionId));
-      return ok({
-        ok: true,
-        sku,
-        name: getProduct(sku)!.name,
-        cart_payable_inr: formatInr(priced.payablePaise),
-      });
+      return ok(
+        {
+          ok: true,
+          sku,
+          name: product.name,
+          image: product.image,
+          cart_payable_inr: formatInr(priced.payablePaise),
+        },
+        [{ alt: product.name, url: product.image }],
+      );
     }
     if (name === "remove_from_cart") {
       mutateCart(sessionId, "remove", String(args.sku || ""));
@@ -310,8 +338,8 @@ export async function runMcpTool(name: string, args: Record<string, unknown>): P
         note:
           result.status === 402
             ? body.paymentLinkUrl || body.accepts?.[0]?.paymentLinkUrl
-              ? "Hand payment_link_url to the human. There is NO payment_id yet — that appears only after they pay. You never enter card data."
-              : "Order created but Payment Link missing. Tell the human to open Circuit /shop (same shopper), type pay, and confirm in Razorpay Checkout. payment_id only exists after capture."
+              ? "Hand payment_link_url to the human — Circuit /pay/{orderId} opens Razorpay Checkout. There is NO payment_id yet until they pay. You never enter card data."
+              : "Order created but pay URL missing. Tell the human to open Circuit /shop and type pay."
             : "No Order created. Use get_negotiate_tips or adjust cart.",
       });
     }

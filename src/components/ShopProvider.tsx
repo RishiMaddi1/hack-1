@@ -87,6 +87,7 @@ function authHeaders(token: string, json = true): HeadersInit {
 export function ShopProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const needsShopperGate = pathname === "/shop" || pathname.startsWith("/shop/");
+  const onPayPage = pathname.startsWith("/pay");
   const [auth, setAuth] = useState<ShopperAuth | null>(null);
   const [gateDone, setGateDone] = useState(false);
   const [gateOpen, setGateOpen] = useState(false);
@@ -105,6 +106,12 @@ export function ShopProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
+
+  useEffect(() => {
+    if (!onPayPage) return;
+    setAskOpen(false);
+    setCartOpen(false);
+  }, [onPayPage]);
 
   const token = auth?.shopperToken || "";
 

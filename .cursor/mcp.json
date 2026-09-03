@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "circuit-u402": {
+      "url": "https://circuit-rishi-g9cxfud2ancddpbt.centralindia-01.azurewebsites.net/api/mcp"
+    },
+    "circuit-u402-local": {
+      "url": "http://localhost:3000/api/mcp"
+    }
+  }
+}
