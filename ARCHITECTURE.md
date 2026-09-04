@@ -29,6 +29,46 @@ Other agentic payment protocols target USD/crypto settlement or require non-Razo
 10. **Gate lab** — `/lab` adversarial demos (sessionId path; shopper UI uses tokens).
 11. **Document store** — `runtime.json` (or `DATA_DIR` on Azure) holds the whole merchant runtime as **one JSON document**. That is deliberate: the schema is already MongoDB-shaped (shoppers / carts / mandates / audit / campaigns). Wiring `saveDb` → `collection.replaceOne` is an afternoon, not a different architecture. Buildathon focus stayed on the rail (signed budget, MCP, server-priced 402), not reinventing persistence.
 
+**Pitch diagram:** use the generated system-map image (or ARCHITECTURE.md mermaid) — not a live `/architecture` route.
+
+```mermaid
+flowchart LR
+  subgraph Actors
+    MCP[AI_Buyer_MCP]
+    UI[Human_Shop_UI]
+    MERCH[Merchant_Audit_Lab]
+  end
+
+  subgraph Edge["Azure App Service"]
+    DISC["/.well-known/agent-commerce.json"]
+    API["Next.js APIs + MCP"]
+  end
+
+  subgraph Gate["Fail-closed gate"]
+    ID[Shopper_token]
+    MAN[Ed25519_mandate]
+    PRICE[priceCart_catalog]
+  end
+
+  subgraph Money["u402 money path"]
+    Q402[HTTP_402_quote]
+    RZP[Razorpay_Order_Link]
+    WH[Webhook_HMAC]
+  end
+
+  subgraph Persist
+    AUD[Hash_chain_audit]
+    DOC[runtime.json_Mongo_ready]
+  end
+
+  MCP --> DISC --> API
+  UI --> API
+  MERCH --> API
+  API --> ID --> MAN --> PRICE --> Q402 --> RZP --> WH --> AUD
+  PRICE --> DOC
+  AUD --> DOC
+```
+
 ```mermaid
 sequenceDiagram
   participant Agent as AI_Shopper_MCP

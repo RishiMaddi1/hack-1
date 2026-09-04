@@ -1,36 +1,168 @@
-# u402 — Circuit
+# Circuit · u402
 
-Razorpay AI Buildathon · Track 01 · AI Growth & Agentic Commerce
+**Razorpay AI Buildathon · Track 01 — AI Growth & Agentic Commerce**
 
-**Mandate-gated agentic checkout** + **MCP rail** so any AI shopper can transact. Shoppers **register a unique username**, **set a budget**, then shop. The server prices the cart, verifies an Ed25519 spend mandate, and creates a Razorpay Order (HTTP 402) + Payment Link. Human confirms. Hash-chained `/audit`.
+Circuit is the **reference merchant**. **u402** is the thin adapter shape underneath it: signed spend mandate → server-priced cart → HTTP **402** quote → Razorpay Order / Payment Link → human pays.
 
-**Security (quiet, not a sticker row):** fail-closed on the money path — Ed25519 mandate, catalog prices only, Razorpay keys/HMAC server-side, 403 over cap, capture-once, hash-chained audit. Circuit ships the live shop, MCP discovery, upsell/campaigns, and abandoned-cart rail in one clean product. See `/lab` → *What's gated*.
+The point is not “another chatbot.” It is a **rail any Razorpay builder merchant can adopt** so AI buyers can transact safely — explainable, bounded, and gated.
 
-Thesis: Razorpay website builder ships this MCP shape → every merchant becomes AI-transactable. Circuit is the reference shop. Not WhatsApp. Not "works on every website without adopting the shape."
+![Circuit u402 system map](assets/arch.png)
 
-## Run
+---
+
+## Why this shape (deliberately thin)
+
+Making a merchant **AI-transactable** does not require RAG or a custom ML stack for a catalog agents can already query by **title and SKU**.
+
+We **deliberately did not use RAG or ML models**. At platform scale compute is real — that cost should sit **once on the platform** (search ranking, recommendations, heavier models later), not get reinvented inside every merchant app.
+
+Merchants adopt a **small contract**:
+
+1. Signed budget (Ed25519 mandate)
+2. Server-priced cart (`priceCart` from catalog SKUs only)
+3. MCP discovery + tools
+4. HTTP 402 into Razorpay
+
+**Circuit** proves that contract end to end. Same gate for **shop chat UI** and **MCP agents**.
+
+---
+
+## What you get
+
+| Surface | What it is |
+| --- | --- |
+| `/shop` | Live store — register, set budget, conversational buyer agent, Razorpay pay |
+| `/lab` | Gate lab — live attacks (underpay, forge, replay, expire, bad HMAC, double capture) |
+| `/audit` | Merchant console — hash-chained trail, left carts, AOV, abandoned-cart email |
+| `/campaigns` | % off campaigns by category / SKU |
+| `/api/mcp` + `npm run mcp:stdio` | MCP tools for Claude Desktop / any agent |
+| `/.well-known/agent-commerce.json` | Agent discovery map |
+
+### MCP buy path (screenshots)
+
+Agents can surface product images and cart details even in MCP mode — shoppers see what they’re buying before the pay link lands.
+
+<p align="center">
+  <img src="assets/agentmcpbuy1.png" alt="MCP agent cart with product images" width="45%" />
+  &nbsp;
+  <img src="assets/agentmcpbuy2.png" alt="MCP quote_checkout HTTP 402 payment link" width="45%" />
+</p>
+
+---
+
+## Bounded agent (the hard security idea)
+
+The AI buyer is **bounded**. It can only act through the **allowed tool surface**. Anything outside those tools is impossible.
+
+**Allowed tools (MCP / same server handlers):**
+
+- `register_shopper` · `login_shopper`
+- `set_budget`
+- `search_catalog` · `get_cart`
+- `add_to_cart` · `remove_from_cart` · `clear_cart`
+- `quote_checkout`
+- `get_negotiate_tips` · `get_audit` (session-scoped)
+
+**What the agent cannot do:**
+
+- Invent Order amounts (`amountPaise` override rejected — catalog `priceCart` wins)
+- Read other shoppers’ carts (token → one session)
+- See Razorpay key / secret / webhook secret (never in LLM or MCP client context)
+- Spend without a signed budget (`BUDGET_REQUIRED`)
+- Bypass mandate expiry / remaining / signature verify
+
+UI chat and MCP hit the **same** cart, mandate, and checkout code paths — no soft second money door.
+
+---
+
+## Security & gates (fail-closed)
+
+Gates live in the product path, not as a sticker row. Prove them on `/lab`.
+
+| Gate | Behavior |
+| --- | --- |
+| Budget before cart | No `set_budget` → cart / checkout locked (UI + MCP) |
+| Ed25519 mandate | Buyer authority signs max / remaining / expiry; merchant verifies **public key only** |
+| Catalog prices win | Server `priceCart` from stored SKUs; LLM never chooses Razorpay amount |
+| Keys server-side | Razorpay credentials + webhook HMAC secret never enter agent context |
+| Over remaining → 403 | No Order created; negotiate tips returned |
+| Webhook HMAC | Bad signature ignored |
+| Capture once | Double capture / confirm on same Order debits once |
+| Stop rule | Decline / dismiss — cart intact, no retry storm |
+| Hash-chained audit | SHA-256 `prevHash` → `hash`; `/audit` shows chain OK / broken |
+| Session isolation | Shopper token hashed at rest; merchants see cross-session only on `/audit` |
+
+**Lab attacks (live `POST /api/lab`):** forge remaining · replay stale mandate · expire mandate · bad webhook HMAC · double capture · underpay injection.
+
+---
+
+## Email
+
+Optional — shopping and MCP work without it.
+
+| Flow | What happens |
+| --- | --- |
+| Email OTP | Shopper verifies email at gate (Resend). Enables cart reminders. |
+| Abandoned-cart reminder | Merchant `/audit` → Left carts → **Send reminder email** (per session) or bulk **Send reminders now** |
+| Email content | **Bill 1** = exact abandoned bag + pay link · **Bill 2** = cheaper same-category plan when one exists |
+| Cron-ready | `POST /api/cron/abandoned-cart` with `Bearer CRON_SECRET` (Azure-friendly) |
+
+Requires `RESEND_API_KEY` / `RESEND_FROM`. Asset art: `public/email-background.png` (set `EMAIL_ASSET_ORIGIN` to your public HTTPS origin so Gmail can load images).
+
+---
+
+## Growth features
+
+- Conversational upsell / cross-sell in the buyer agent
+- Campaigns (`/campaigns`) — percent off by category or SKU, budget-capped
+- `/audit` AOV with vs without upsell
+- Left-cart recovery email (above)
+- Negotiate tips when quote exceeds remaining mandate
+
+---
+
+## Happy path
+
+```text
+register_shopper → set_budget (Ed25519)
+  → search_catalog → add_to_cart
+  → priceCart (server)
+  → quote_checkout (HTTP 402 + Razorpay Order / Payment Link)
+  → human pays on Razorpay
+  → webhook HMAC → capture-once
+  → hash-chain audit
+  → (optional) abandoned-cart email if they leave
+```
+
+---
+
+## Run locally
 
 ```bash
 cp .env.example .env.local
-# paste rzp_test_ Key ID + Key Secret (+ optional OpenAI + mandate keypair)
+# RAZORPAY_KEY_ID (rzp_test_…) + RAZORPAY_KEY_SECRET
+# optional: OPENAI_API_KEY, BUYER_MANDATE_*_B64, RESEND_*, MCP_SHARED_SECRET, DATA_DIR
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000/shop](http://localhost:3000/shop) → register username → set budget → shop.
+Open [http://localhost:3000/shop](http://localhost:3000/shop) → register → set budget → shop.
 
-- MCP HTTP: `GET/POST /api/mcp`
-- Discovery: `/.well-known/agent-commerce.json`
-- Gate lab: [/lab](http://localhost:3000/lab)
-- Audit + hash chain: [/audit](http://localhost:3000/audit)
+| URL | Purpose |
+| --- | --- |
+| `/shop` | Store + buyer agent |
+| `/lab` | Gate attacks |
+| `/audit` | Merchant audit + emails |
+| `/campaigns` | Campaigns |
+| `GET/POST /api/mcp` | MCP over HTTP |
+| `/.well-known/agent-commerce.json` | Discovery |
+| `GET /api/catalog` | Agent-readable catalog |
 
-### Claude Desktop / any MCP client (stdio)
+### MCP stdio (Claude Desktop / Inspector)
 
 ```bash
 npm run mcp:stdio
 ```
-
-Config sketch:
 
 ```json
 {
@@ -38,31 +170,53 @@ Config sketch:
     "circuit-u402": {
       "command": "npx",
       "args": ["tsx", "scripts/mcp-server.ts"],
-      "cwd": "/path/to/hack-1"
+      "cwd": "/absolute/path/to/this/repo"
     }
   }
 }
 ```
 
-Or HTTP: `POST http://localhost:3000/api/mcp` with JSON-RPC `tools/list` / `tools/call`.
+Flow: `register_shopper` → save `shopper_token` → `set_budget` → `search_catalog` → `add_to_cart` → `quote_checkout` → hand `payment_link_url` to the human.
 
-Flow: `register_shopper` → save `shopper_token` → `set_budget` → `search_catalog` → `add_to_cart` → `quote_checkout` → hand `payment_link_url` to human.
+Optional: `MCP_SHARED_SECRET` → `Authorization: Bearer …` on `/api/mcp`.
 
-Optional `MCP_SHARED_SECRET` → `Authorization: Bearer …` on `/api/mcp`.
+---
 
-## Demo script
+## Deploy
 
-1. Register as `demo_buyer`, set budget ₹8000
-2. Shop: *Swarm keyboard and Harpy mouse under ₹5000* → pay → Razorpay
-3. Over-mandate → 403 + negotiate
-4. MCP Inspector / Claude: same tools, Payment Link handoff
-5. `/lab` underpay + double-capture
-6. `/audit` chain OK + live AOV
+Production target: **Azure App Service** via **GitHub Actions** (not a hobby one-click host). Set `DATA_DIR` for persistent `runtime.json` on Azure. Configure Razorpay webhook URL to your public `/api/webhooks/razorpay`.
+
+---
+
+## Persistence
+
+One JSON document: `data/runtime.json` (`src/lib/store.ts`) — shoppers, sessions, carts, mandates, audit, campaigns, checkouts.
+
+Same document shape is **Mongo-ready** (`replaceOne` later). Buildathon focus stayed on the **rail** (mandate + MCP + 402 + Razorpay), not swapping a file for a database.
+
+---
 
 ## Stack
 
-Next.js · TypeScript · Razorpay · Ed25519 · `@modelcontextprotocol/sdk` · hash-chained audit
+Next.js · TypeScript · Razorpay test mode · Ed25519 · `@modelcontextprotocol/sdk` · hash-chained audit · Resend (email) · Azure App Service
 
-**Persistence (intentional):** runtime state is one JSON document (`data/runtime.json` via `src/lib/store.ts`) — shoppers, carts, mandates, audit, campaigns. Same document shape drops into MongoDB as one collection later; we did **not** spend the buildathon on ORM/DB ops because the hard parts are mandate + MCP + 402 + Razorpay, not swapping a file for a document DB.
+---
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [PITCH.md](PITCH.md), [TRACK01_VERIFICATION.md](TRACK01_VERIFICATION.md).
+## Docs
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — layers, contracts, money rules
+- [PITCH.md](PITCH.md) — 5-minute demo script
+- [TRACK01_VERIFICATION.md](TRACK01_VERIFICATION.md) — verify claims against code
+
+---
+
+## Track 01 bar
+
+| Official ask | Where Circuit shows it |
+| --- | --- |
+| Explainable / bounded / gated money | Mandate + `priceCart` + 402/403 + tool bound |
+| Audit trail | Hash-chained `/audit` |
+| One failure handled gracefully | Decline / dismiss + stop rule; lab failure proofs |
+| AI-transactable merchant | Shop UI + MCP + discovery + Payment Link |
+
+**Circuit** = reference shop. **u402** = the contract. Ship the standard first; platform intelligence layers can come later.
