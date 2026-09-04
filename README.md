@@ -2,6 +2,11 @@
 
 **Razorpay AI Buildathon · Track 01 — AI Growth & Agentic Commerce**
 
+- **5-min pitch:** [YouTube](https://www.youtube.com/watch?v=1WJ8v_G1N6k)
+- **Live demo:** [circuit-rishi (Azure)](https://circuit-rishi-g9cxfud2ancddpbt.centralindia-01.azurewebsites.net/)
+- **Portfolio:** [rishimaddi.pages.dev](https://rishimaddi.pages.dev/)
+- **Resume:** [Rishi_software_engineer.pdf](assets/Rishi_software_engineer.pdf)
+
 Circuit is the **reference merchant**. **u402** is the thin adapter shape underneath it: signed spend mandate → server-priced cart → HTTP **402** quote → Razorpay Order / Payment Link → human pays.
 
 The point is not “another chatbot.” It is a **rail any Razorpay builder merchant can adopt** so AI buyers can transact safely — explainable, bounded, and gated.
