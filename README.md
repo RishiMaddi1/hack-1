@@ -191,14 +191,35 @@ Production target: **Azure App Service** via **GitHub Actions** (not a hobby one
 
 ### What broke on Azure — and how we fixed it
 
-Two hard production issues (not “localhost forgot HTTPS”):
+These were **real App Service / deploy pain**, not toy bugs. Localhost was fine. GitHub had the right code. Azure still lied to us for hours.
 
-| Issue | What we saw | Fix |
-| --- | --- | --- |
-| **Stale / cached builds** | GitHub and localhost had the new app, but Azure kept serving an **old** build — homepage and behavior didn’t match the repo | Clear stale site contents / cached deploy artifacts under the App Service instance (`wwwroot` / Kudu), ship a slim Next **standalone** zip from GitHub Actions, disable on-server Oryx rebuild (`SCM_DO_BUILD_DURING_DEPLOYMENT=false`), hard-refresh after a green deploy |
-| **409 Conflict + restart hell** | GitHub Actions failed with **Conflict (CODE: 409)**; Portal stuck on “deployment In Progress”; re-runs kept 409’ing. Env/secret changes also didn’t apply until process restart | Kudu SSH: clear zombie deploy lock (`/home/site/deployments/pending`, `/home/site/locks/*`). One deploy at a time. After App Settings changes → **Restart** the App Service so the Node process picks up new env |
+#### 1. Stale / cached builds — Azure kept serving the *old* app
 
-See [DEPLOY_AZURE.md](DEPLOY_AZURE.md) and [WHAT_BROKE.md](WHAT_BROKE.md) for the full trail.
+**What happened.** After green GitHub Actions runs, the live URL still showed an **old homepage and old behavior**. We’d refresh, wait, redeploy — same ghost build. Localhost and the repo were already on the new Circuit / Buildathon UI. Azure was not.
+
+**Why it hurt.** App Service doesn’t always do a clean replace of `/home/site/wwwroot`. Early packages left stale files behind. On-server Oryx rebuilds could also interfere with a Next.js standalone bundle. So “Actions is green” did **not** mean “users see the commit you think.”
+
+**What we did.**
+- Went into the instance (Kudu) and **cleared stale site contents / cached deploy artifacts** so new files could actually land
+- Stopped shipping fat / half-broken packages — build a slim Next **standalone** zip in GitHub Actions (standalone + `.next/static` + `public`)
+- Set `SCM_DO_BUILD_DURING_DEPLOYMENT=false` so Azure **doesn’t rebuild on the box** and corrupt the artifact
+- Hard-refresh after a truly green deploy and verify homepage text matches the commit
+
+That’s the kind of issue you only learn by shipping: CI green ≠ production truth until the site files are actually replaced.
+
+#### 2. 409 Conflict + restart hell — zombie deploy locks
+
+**What happened.** GitHub Actions started failing with **`Conflict (CODE: 409)`**. The Azure Portal still said deployment **“In Progress”** even after the pipeline failed. Every re-run hit the same 409. Separately, App Settings / secrets looked updated in the portal but the running Node process still had old env until we **Restart**ed.
+
+**Why it hurt.** A cancelled or fat OneDeploy can leave a **zombie lock** under Kudu (`/home/site/deployments/pending`, `/home/site/locks/*`). Actions fails; Kudu never clears “pending.” Hammering re-runs makes it worse. Env vars also only apply when the process starts — so “I set the secret” without a restart is a silent trap.
+
+**What we did.**
+- Kudu SSH: delete `pending` and clear `/home/site/locks/*`
+- **One deploy at a time** — don’t pile Actions runs into a locked site
+- Slim the zip so OneDeploy doesn’t hang forever
+- After any App Settings change → **Restart** App Service so Node picks up Razorpay / mandate / Resend env for real
+
+Full trail: [DEPLOY_AZURE.md](DEPLOY_AZURE.md) · [WHAT_BROKE.md](WHAT_BROKE.md)
 
 ---
 
