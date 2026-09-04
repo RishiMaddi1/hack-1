@@ -7,6 +7,9 @@ Circuit is the **reference merchant**. **u402** is the thin adapter shape undern
 The point is not “another chatbot.” It is a **rail any Razorpay builder merchant can adopt** so AI buyers can transact safely — explainable, bounded, and gated.
 
 ![Circuit u402 system map](assets/arch.png)
+![Circuit shop — clean UI with buyer agent and HTTP 402](assets/image.png)
+
+**Shop UI.** Circuit’s storefront is a clean, product-first layout — category filters, catalog grid, cart — with a persistent **Buyer agent** drawer. The agent searches, adds, and quotes; when checkout is ready it surfaces an **HTTP 402 · payment required** card with the Razorpay Order and mandate remaining, then hands the human **Open Razorpay** for PCI-safe card confirmation. Same prices, same mandate, same gate as MCP — no second money path.
 
 ---
 
@@ -185,6 +188,22 @@ Optional: `MCP_SHARED_SECRET` → `Authorization: Bearer …` on `/api/mcp`.
 ## Deploy
 
 Production target: **Azure App Service** via **GitHub Actions** (not a hobby one-click host). Set `DATA_DIR` for persistent `runtime.json` on Azure. Configure Razorpay webhook URL to your public `/api/webhooks/razorpay`.
+
+### What broke on Azure — and how we fixed it
+
+These were real production issues, not theory:
+
+| Issue | What we saw | Fix |
+| --- | --- | --- |
+| **Ephemeral disk / data wipe** | After redeploy, shoppers, carts, and audit looked empty — App Service local disk is not durable across instances/deploys | Set `DATA_DIR=/home/data` so `runtime.json` lives on Azure’s persistent mount |
+| **Default Azure page / empty app** | First hits showed the stock App Service page while Actions was still building | Wait on Deployment Center logs; pin GitHub Actions workflow to build + deploy `master` cleanly |
+| **Webhook never fired in prod** | Local works; paid events missing on Azure | Point Razorpay dashboard webhook at `https://<app>.azurewebsites.net/api/webhooks/razorpay` and set `RAZORPAY_WEBHOOK_SECRET` in App Settings |
+| **Email images broken in Gmail** | Abandoned-cart mails showed blank art when sent from local or wrong origin | Absolute image URLs via `EMAIL_ASSET_ORIGIN` / `PUBLIC_APP_URL` (Gmail cannot load `localhost`) |
+| **Hash chain “broken” after cart mutations** | Audit showed BROKEN even when events were honest | Snapshot event `data` on write (deep clone); stop storing live cart object by reference; auto-reseal / repair path on audit load |
+| **Client confirm vs webhook race** | Both paths could try to capture the same Order | Single `applyCapture` writer — capture-once; loser gets “already spent” / no double debit |
+| **Abandoned-cart cron** | Need a server job, not only the merchant button | `POST /api/cron/abandoned-cart` + `CRON_SECRET`; merchant Audit button runs the same job for demos |
+
+See [DEPLOY_AZURE.md](DEPLOY_AZURE.md) for the full portal checklist.
 
 ---
 
